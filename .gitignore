@@ -7,9 +7,18 @@ wheels/
 *.egg-info
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
 # Virtual environments
 .venv
+.env
+.env.*
 
 # Local training outputs
 runs/
+*.log
+
+# OS/editor noise
+.DS_Store
