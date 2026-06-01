@@ -148,8 +148,19 @@ because the training CLI still defaults to the older `possession` profile.
 - `-0.01` per step while the puck is on the player's own side;
 - `0` reward when the puck is on the other side, unless one of the rules above applies.
 
-Older reward profiles (`balanced`, `aggressive`, `defensive`, and `possession`) remain in
-the code for experiments.
+Older reward profiles remain in the code for experiments:
+
+| Profile | What it encourages |
+| --- | --- |
+| `balanced` | Original dense shaping profile. It mixes puck progress, puck position, puck speed, puck contact, distance to the puck, defensive alignment, own-goal danger, small magnet penalties, time cost, and action cost. Useful as a general baseline, but it can reward many small behaviors that do not always translate into better scoring. |
+| `aggressive` | More attack-heavy dense shaping. It increases terminal goal reward, forward progress, puck position, puck speed, contact, and puck-distance rewards, while reducing defense, time, and action penalties. It tends to produce policies that chase the puck and try to move it forward quickly, sometimes at the cost of protecting their own goal. |
+| `defensive` | More safety-heavy dense shaping. It increases terminal goal reward, defensive alignment, and own-goal danger penalties, while reducing forward-progress and puck-speed incentives. It is useful when policies concede too easily, but can become too passive if the defensive terms dominate. |
+| `possession` | Dense shaping tuned to stay involved with the puck. It strongly rewards contact and staying close to the puck, with moderate progress, speed, and defense terms and lower time/action costs. This was the previous default before the simpler magnet-aware reward. |
+
+The older profiles use continuous shaping rewards and small ongoing penalties for magnet
+attachment/proximity. The `simple` profile is easier to reason about because it mostly
+rewards the actual game outcome and penalizes concrete bad situations: getting a magnet,
+being pulled by a magnet, and letting the puck stay on your own side.
 
 ## Model Inputs
 
