@@ -367,7 +367,7 @@ def train_entry(
     ] = 450,
     reward_profile: Annotated[
         str, typer.Option(help="Reward profile: balanced, aggressive, defensive, possession.")
-    ] = "aggressive",
+    ] = "possession",
     bc_samples: Annotated[int, typer.Option(help="Expert samples for behavior-cloning warm start.")] = 4096,
     bc_epochs: Annotated[int, typer.Option(help="Behavior-cloning epochs before PPO.")] = 4,
     bc_batch_size: Annotated[int, typer.Option(help="Behavior-cloning batch size.")] = 256,
@@ -463,7 +463,7 @@ def train(
     batch_size: int = 256,
     snapshot_freq: int = 10_000,
     max_steps: int | None = 450,
-    reward_profile: str = "aggressive",
+    reward_profile: str = "possession",
     bc_samples: int = 4096,
     bc_epochs: int = 4,
     bc_batch_size: int = 256,

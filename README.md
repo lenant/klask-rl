@@ -29,8 +29,9 @@ generated artifacts.
 The latest local run used:
 
 ```bash
-uv run klask-train --total-steps 80000 --num-envs 8 --n-steps 256 \
-  --batch-size 512 --snapshot-freq 20000 --max-steps 450
+uv run klask-train --total-steps 180000 --num-envs 8 --n-steps 256 \
+  --batch-size 512 --snapshot-freq 30000 --max-steps 450 \
+  --reward-profile possession --bc-samples 12000 --bc-epochs 8
 ```
 
 Evaluation commands:
@@ -48,5 +49,8 @@ and self-play matchups and reports quality metrics: goal margin, goals per game,
 draw rate, defense rate, contact activity, territory, and aggregate quality.
 
 Training supports reward profiles with `--reward-profile balanced|aggressive|defensive|possession`.
-The default profile is `aggressive` and uses behavior-cloning warm start samples
+The default profile is `possession` and uses behavior-cloning warm start samples
 from an active striker expert before PPO self-play.
+
+The best current checkpoint was selected from the possession reward sweep and is
+documented in `reports/reward_experiments.md`.
