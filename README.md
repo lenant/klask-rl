@@ -36,11 +36,22 @@ uv run pytest
 
 `ffmpeg` is only required if you want to record new videos.
 
+## Download Demo Model
+
+The trained demo policy is published as a GitHub Release asset, not committed to git.
+Download it into the path used by the commands below:
+
+```bash
+mkdir -p runs/klask/latest
+curl -L -o runs/klask/latest/simple_leader.zip \
+  https://github.com/lenant/klask-rl/releases/download/v0.1-demo/simple_leader.zip
+```
+
 ## Watch A Model
 
-Trained checkpoints and logs are generated artifacts and are ignored by git. The current
-local leader is expected at `runs/klask/latest/simple_leader.zip` after copying or training
-a model.
+Trained checkpoints and logs are generated artifacts and are ignored by git. The commands
+below expect a model at `runs/klask/latest/simple_leader.zip`, either from the release
+download above or from a local training run.
 
 Model vs model:
 
