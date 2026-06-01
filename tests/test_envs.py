@@ -4,6 +4,7 @@ import numpy as np
 from pettingzoo.test import parallel_api_test
 from stable_baselines3.common.env_checker import check_env
 
+from klask_rl.config import AGENTS
 from klask_rl.envs import KlaskParallelEnv, SelfPlayKlaskEnv
 from klask_rl.opponents import HeuristicOpponent
 
@@ -38,3 +39,20 @@ def test_reward_profiles_change_reward_weights() -> None:
     aggressive = KlaskParallelEnv(reward_profile="aggressive")
     assert aggressive.reward_config.progress > balanced.reward_config.progress
     assert aggressive.reward_config.terminal_goal > balanced.reward_config.terminal_goal
+
+
+def test_reward_overlay_tracks_step_and_episode_rewards() -> None:
+    env = KlaskParallelEnv(render_mode="rgb_array")
+    env.reset(seed=42)
+    actions = {agent: np.zeros(2, dtype=np.float32) for agent in AGENTS}
+
+    _, rewards_1, _, _, _ = env.step(actions)
+    _, rewards_2, _, _, infos = env.step(actions)
+
+    for agent in AGENTS:
+        assert infos[agent]["rewards"][agent] == rewards_2[agent]
+        assert infos[agent]["episode_rewards"][agent] == rewards_1[agent] + rewards_2[agent]
+
+    frame = env.render()
+    assert frame is not None
+    assert frame.shape == (env.physics._surface_size[1], env.physics._surface_size[0], 3)

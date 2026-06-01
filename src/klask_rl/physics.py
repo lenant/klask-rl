@@ -15,6 +15,9 @@ class PhysicsStepResult:
     contacts: dict[str, bool]
 
 
+RewardOverlay = dict[str, dict[str, float]]
+
+
 class KlaskPhysics:
     """Pymunk-backed puck and handle simulation.
 
@@ -31,7 +34,14 @@ class KlaskPhysics:
         self.handle_shapes: dict[str, pymunk.Circle] = {}
         self._screen: Any | None = None
         self._clock: Any | None = None
-        self._surface_size = (900, int(900 * self.config.height / self.config.width))
+        arena_width = 900
+        self._panel_width = 170
+        self._panel_gap = 12
+        self._arena_size = (arena_width, int(arena_width * self.config.height / self.config.width))
+        self._surface_size = (
+            self._arena_size[0] + 2 * (self._panel_width + self._panel_gap),
+            self._arena_size[1],
+        )
         self.reset()
 
     def reset(self, seed: int | None = None) -> None:
@@ -283,11 +293,13 @@ class KlaskPhysics:
             "right_vel": np.array(self.handle_bodies["right"].velocity, dtype=np.float32),
         }
 
-    def render(self, mode: str = "human") -> np.ndarray | None:
+    def render(self, mode: str = "human", reward_overlay: RewardOverlay | None = None) -> np.ndarray | None:
         import pygame
 
         cfg = self.config
         width, height = self._surface_size
+        arena_width, arena_height = self._arena_size
+        arena_left = self._panel_width + self._panel_gap
         if mode == "human":
             if self._screen is None:
                 pygame.init()
@@ -303,27 +315,35 @@ class KlaskPhysics:
             surface = pygame.Surface((width, height))
 
         def to_screen(point: tuple[float, float] | pymunk.Vec2d) -> tuple[int, int]:
-            x = int((point[0] + cfg.half_width) / cfg.width * width)
-            y = int((cfg.half_height - point[1]) / cfg.height * height)
+            x = arena_left + int((point[0] + cfg.half_width) / cfg.width * arena_width)
+            y = int((cfg.half_height - point[1]) / cfg.height * arena_height)
             return x, y
 
         def to_px(radius: float) -> int:
-            return max(2, int(radius / cfg.width * width))
+            return max(2, int(radius / cfg.width * arena_width))
 
-        surface.fill((22, 92, 98))
-        pygame.draw.rect(surface, (238, 232, 212), pygame.Rect(0, 0, width, height), 3)
-        goal_px = int(cfg.goal_width / cfg.height * height)
+        surface.fill((14, 18, 24))
+        arena_rect = pygame.Rect(arena_left, 0, arena_width, arena_height)
+        pygame.draw.rect(surface, (22, 92, 98), arena_rect)
+        pygame.draw.rect(surface, (238, 232, 212), arena_rect, 3)
+        goal_px = int(cfg.goal_width / cfg.height * arena_height)
         pygame.draw.rect(
             surface,
             (235, 81, 75),
-            pygame.Rect(0, height // 2 - goal_px // 2, 8, goal_px),
+            pygame.Rect(arena_left, arena_height // 2 - goal_px // 2, 8, goal_px),
         )
         pygame.draw.rect(
             surface,
             (74, 126, 234),
-            pygame.Rect(width - 8, height // 2 - goal_px // 2, 8, goal_px),
+            pygame.Rect(arena_left + arena_width - 8, arena_height // 2 - goal_px // 2, 8, goal_px),
         )
-        pygame.draw.line(surface, (200, 222, 220), (width // 2, 0), (width // 2, height), 1)
+        pygame.draw.line(
+            surface,
+            (200, 222, 220),
+            (arena_left + arena_width // 2, 0),
+            (arena_left + arena_width // 2, arena_height),
+            1,
+        )
         pygame.draw.circle(surface, (245, 245, 240), to_screen(self.puck_body.position), to_px(cfg.puck_radius))
         pygame.draw.circle(
             surface,
@@ -337,6 +357,8 @@ class KlaskPhysics:
             to_screen(self.handle_bodies["right"].position),
             to_px(cfg.handle_radius),
         )
+        if reward_overlay is not None:
+            self._draw_reward_overlay(pygame, surface, reward_overlay)
 
         if mode == "human":
             pygame.display.flip()
@@ -352,3 +374,41 @@ class KlaskPhysics:
             pygame.display.quit()
             self._screen = None
             self._clock = None
+
+    def _draw_reward_overlay(self, pygame: Any, surface: Any, reward_overlay: RewardOverlay) -> None:
+        pygame.font.init()
+        height = self._surface_size[1]
+        panel_height = 150
+        panel_y = (height - panel_height) // 2
+        left_rect = pygame.Rect(8, panel_y, self._panel_width - 16, panel_height)
+        right_rect = pygame.Rect(
+            self._surface_size[0] - self._panel_width + 8,
+            panel_y,
+            self._panel_width - 16,
+            panel_height,
+        )
+        title_font = pygame.font.SysFont("Arial", 20, bold=True)
+        label_font = pygame.font.SysFont("Arial", 15)
+        value_font = pygame.font.SysFont("Arial", 22, bold=True)
+
+        def draw_panel(agent: str, rect: Any, color: tuple[int, int, int]) -> None:
+            values = reward_overlay.get(agent, {})
+            step_reward = float(values.get("step", 0.0))
+            episode_reward = float(values.get("episode", 0.0))
+            pygame.draw.rect(surface, (30, 36, 42), rect, border_radius=6)
+            pygame.draw.rect(surface, color, rect, width=2, border_radius=6)
+
+            title = title_font.render(agent.upper(), True, color)
+            step_label = label_font.render("step reward", True, (190, 200, 204))
+            episode_label = label_font.render("episode total", True, (190, 200, 204))
+            step_value = value_font.render(f"{step_reward:+.3f}", True, (242, 245, 242))
+            episode_value = value_font.render(f"{episode_reward:+.2f}", True, (242, 245, 242))
+
+            surface.blit(title, (rect.x + 14, rect.y + 12))
+            surface.blit(step_label, (rect.x + 14, rect.y + 48))
+            surface.blit(step_value, (rect.x + 14, rect.y + 66))
+            surface.blit(episode_label, (rect.x + 14, rect.y + 98))
+            surface.blit(episode_value, (rect.x + 14, rect.y + 116))
+
+        draw_panel("left", left_rect, (235, 81, 75))
+        draw_panel("right", right_rect, (74, 126, 234))

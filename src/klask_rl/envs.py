@@ -39,6 +39,8 @@ class KlaskParallelEnv(ParallelEnv):
         }
         self.steps = 0
         self.scores = {agent: 0 for agent in AGENTS}
+        self.last_rewards = {agent: 0.0 for agent in AGENTS}
+        self.episode_rewards = {agent: 0.0 for agent in AGENTS}
 
     def observation_space(self, agent: str) -> spaces.Box:
         return self.observation_spaces[agent]
@@ -56,6 +58,8 @@ class KlaskParallelEnv(ParallelEnv):
         self.agents = list(AGENTS)
         self.steps = 0
         self.scores = {agent: 0 for agent in AGENTS}
+        self.last_rewards = {agent: 0.0 for agent in AGENTS}
+        self.episode_rewards = {agent: 0.0 for agent in AGENTS}
         observations = {agent: self._make_observation(agent) for agent in self.agents}
         infos = {agent: {"score": self.scores.copy()} for agent in self.agents}
         return observations, infos
@@ -105,6 +109,9 @@ class KlaskParallelEnv(ParallelEnv):
         if result.scored_by is not None:
             rewards[result.scored_by] += self.reward_config.terminal_goal
             rewards[OPPONENT[result.scored_by]] -= self.reward_config.terminal_goal
+        self.last_rewards = {agent: float(rewards.get(agent, 0.0)) for agent in AGENTS}
+        for agent in active_agents:
+            self.episode_rewards[agent] += self.last_rewards[agent]
 
         terminated = result.scored_by is not None
         truncated = self.steps >= self.arena_config.max_steps
@@ -117,6 +124,8 @@ class KlaskParallelEnv(ParallelEnv):
                 "scored_by": result.scored_by,
                 "contacts": result.contacts.copy(),
                 "steps": self.steps,
+                "rewards": self.last_rewards.copy(),
+                "episode_rewards": self.episode_rewards.copy(),
             }
             for agent in active_agents
         }
@@ -207,7 +216,14 @@ class KlaskParallelEnv(ParallelEnv):
         )
 
     def render(self) -> np.ndarray | None:
-        return self.physics.render(self.render_mode or "human")
+        reward_overlay = {
+            agent: {
+                "step": self.last_rewards[agent],
+                "episode": self.episode_rewards[agent],
+            }
+            for agent in AGENTS
+        }
+        return self.physics.render(self.render_mode or "human", reward_overlay=reward_overlay)
 
     def close(self) -> None:
         self.physics.close()
