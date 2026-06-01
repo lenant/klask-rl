@@ -11,7 +11,7 @@ from rich.console import Console
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 
 from klask_rl.envs import SelfPlayKlaskEnv
 from klask_rl.opponents import (
@@ -115,6 +115,8 @@ class SelfPlaySnapshotCallback(BaseCallback):
         self.model.save(path)
         checkpoint = path.with_suffix(".zip")
         self.pool.add_checkpoint(checkpoint)
+        if self.training_env is not None:
+            self.training_env.env_method("add_opponent_checkpoint", str(checkpoint))
         if self.verbose:
             console.print(f"saved self-play snapshot: {checkpoint}")
         return True
@@ -132,15 +134,29 @@ def make_named_opponent(name: str, seed: int = 0) -> OpponentPolicy:
     raise typer.BadParameter("opponent must be one of: heuristic, random, passive, striker")
 
 
+def make_training_pool(seed: int) -> OpponentPool:
+    return OpponentPool(
+        [
+            PassiveOpponent(),
+            RandomOpponent(seed=seed + 1),
+            StrikerOpponent(),
+            HeuristicOpponent(),
+            HeuristicOpponent(aggression=4.0),
+        ],
+        seed=seed,
+    )
+
+
 def build_vec_env(
-    pool: OpponentPool,
     num_envs: int,
     seed: int,
     max_steps: int | None,
     reward_profile: str,
-) -> DummyVecEnv:
+    vec_env: str,
+) -> VecEnv:
     def make_env(rank: int):
         def _factory():
+            pool = make_training_pool(seed + rank)
             env = SelfPlayKlaskEnv(
                 opponent=pool,
                 max_steps=max_steps,
@@ -150,7 +166,13 @@ def build_vec_env(
 
         return _factory
 
-    env = DummyVecEnv([make_env(rank) for rank in range(num_envs)])
+    factories = [make_env(rank) for rank in range(num_envs)]
+    if vec_env == "dummy":
+        env = DummyVecEnv(factories)
+    elif vec_env == "subproc":
+        env = SubprocVecEnv(factories, start_method="fork")
+    else:
+        raise typer.BadParameter("vec-env must be one of: dummy, subproc")
     env.seed(seed)
     return env
 
@@ -168,26 +190,19 @@ def run_train(
     bc_samples: int,
     bc_epochs: int,
     bc_batch_size: int,
+    vec_env: str,
+    device: str,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     latest_dir = output_dir / "latest"
     latest_dir.mkdir(parents=True, exist_ok=True)
-    pool = OpponentPool(
-        [
-            PassiveOpponent(),
-            RandomOpponent(seed=seed + 1),
-            StrikerOpponent(),
-            HeuristicOpponent(),
-            HeuristicOpponent(aggression=4.0),
-        ],
-        seed=seed,
-    )
+    pool = make_training_pool(seed)
     env = build_vec_env(
-        pool=pool,
         num_envs=num_envs,
         seed=seed,
         max_steps=max_steps,
         reward_profile=reward_profile,
+        vec_env=vec_env,
     )
     model = PPO(
         "MlpPolicy",
@@ -201,6 +216,7 @@ def run_train(
         clip_range=0.2,
         tensorboard_log=str(output_dir / "tensorboard"),
         seed=seed,
+        device=device,
         verbose=1,
     )
     bc_stats = pretrain_policy_with_behavior_cloning(
@@ -371,6 +387,8 @@ def train_entry(
     bc_samples: Annotated[int, typer.Option(help="Expert samples for behavior-cloning warm start.")] = 4096,
     bc_epochs: Annotated[int, typer.Option(help="Behavior-cloning epochs before PPO.")] = 4,
     bc_batch_size: Annotated[int, typer.Option(help="Behavior-cloning batch size.")] = 256,
+    vec_env: Annotated[str, typer.Option(help="Vector env backend: dummy or subproc.")] = "dummy",
+    device: Annotated[str, typer.Option(help="SB3 device: auto, cpu, cuda, cuda:0, etc.")] = "auto",
 ) -> None:
     run_train(
         total_steps,
@@ -385,6 +403,8 @@ def train_entry(
         bc_samples,
         bc_epochs,
         bc_batch_size,
+        vec_env,
+        device,
     )
 
 
@@ -467,6 +487,8 @@ def train(
     bc_samples: int = 4096,
     bc_epochs: int = 4,
     bc_batch_size: int = 256,
+    vec_env: str = "dummy",
+    device: str = "auto",
 ) -> None:
     run_train(
         total_steps,
@@ -481,6 +503,8 @@ def train(
         bc_samples,
         bc_epochs,
         bc_batch_size,
+        vec_env,
+        device,
     )
 
 

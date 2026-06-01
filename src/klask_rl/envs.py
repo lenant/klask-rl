@@ -278,3 +278,10 @@ class SelfPlayKlaskEnv(gym.Env):
 
     def close(self) -> None:
         self.base_env.close()
+
+    def add_opponent_checkpoint(self, checkpoint_path: str) -> bool:
+        add_checkpoint = getattr(self.opponent, "add_checkpoint", None)
+        if add_checkpoint is None:
+            return False
+        add_checkpoint(checkpoint_path)
+        return True

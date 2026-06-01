@@ -85,7 +85,7 @@ class SB3CheckpointOpponent:
         if self._model is None:
             from stable_baselines3 import PPO
 
-            self._model = PPO.load(self.model_path)
+            self._model = PPO.load(self.model_path, device="cpu")
         action, _ = self._model.predict(observation, deterministic=self.deterministic)
         return np.asarray(action, dtype=np.float32)
 
