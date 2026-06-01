@@ -180,6 +180,19 @@ def build_vec_env(
     return env
 
 
+def parse_policy_net_arch(value: str) -> tuple[int, ...]:
+    separators_normalized = value.replace("x", ",").replace("X", ",")
+    try:
+        sizes = tuple(int(part.strip()) for part in separators_normalized.split(",") if part.strip())
+    except ValueError as exc:
+        raise typer.BadParameter("policy-net-arch must be like 64,64 or 256x256x256") from exc
+    if not sizes:
+        raise typer.BadParameter("policy-net-arch must include at least one hidden layer size")
+    if any(size <= 0 for size in sizes):
+        raise typer.BadParameter("policy-net-arch hidden sizes must be positive")
+    return sizes
+
+
 def run_train(
     total_steps: int,
     num_envs: int,
@@ -195,10 +208,12 @@ def run_train(
     bc_batch_size: int,
     vec_env: str,
     device: str,
+    policy_net_arch: str,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     latest_dir = output_dir / "latest"
     latest_dir.mkdir(parents=True, exist_ok=True)
+    net_arch = parse_policy_net_arch(policy_net_arch)
     pool = make_training_pool(seed)
     env = build_vec_env(
         num_envs=num_envs,
@@ -220,8 +235,10 @@ def run_train(
         tensorboard_log=str(output_dir / "tensorboard"),
         seed=seed,
         device=device,
+        policy_kwargs={"net_arch": list(net_arch)},
         verbose=1,
     )
+    console.print({"policy_net_arch": net_arch})
     bc_stats = pretrain_policy_with_behavior_cloning(
         model,
         samples=bc_samples,
@@ -534,6 +551,9 @@ def train_entry(
     bc_batch_size: Annotated[int, typer.Option(help="Behavior-cloning batch size.")] = 256,
     vec_env: Annotated[str, typer.Option(help="Vector env backend: dummy or subproc.")] = "dummy",
     device: Annotated[str, typer.Option(help="SB3 device: auto, cpu, cuda, cuda:0, etc.")] = "auto",
+    policy_net_arch: Annotated[
+        str, typer.Option(help="PPO MLP hidden sizes, e.g. 64,64 or 256x256x256.")
+    ] = "64,64",
 ) -> None:
     run_train(
         total_steps,
@@ -550,6 +570,7 @@ def train_entry(
         bc_batch_size,
         vec_env,
         device,
+        policy_net_arch,
     )
 
 
@@ -654,6 +675,7 @@ def train(
     bc_batch_size: int = 256,
     vec_env: str = "dummy",
     device: str = "auto",
+    policy_net_arch: str = "64,64",
 ) -> None:
     run_train(
         total_steps,
@@ -670,6 +692,7 @@ def train(
         bc_batch_size,
         vec_env,
         device,
+        policy_net_arch,
     )
 
 

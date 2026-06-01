@@ -7,7 +7,9 @@ from klask_rl.cli import (
     _human_action_to_canonical,
     _scaled_world_action,
     _world_action_from_key_state,
+    parse_policy_net_arch,
     play_app,
+    train_app,
 )
 
 
@@ -45,3 +47,15 @@ def test_play_help_exposes_reward_profile() -> None:
 
     assert result.exit_code == 0
     assert "--reward-profile" in result.output
+
+
+def test_train_help_exposes_policy_net_arch() -> None:
+    result = CliRunner().invoke(train_app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "--policy-net-arch" in result.output
+
+
+def test_parse_policy_net_arch_accepts_commas_and_x() -> None:
+    assert parse_policy_net_arch("256,256,256") == (256, 256, 256)
+    assert parse_policy_net_arch("256x256x256") == (256, 256, 256)
