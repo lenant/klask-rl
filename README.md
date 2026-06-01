@@ -17,11 +17,9 @@ The repository contains:
 
 Five self-play episodes recorded from the current PPO leader:
 
-<video controls muted playsinline width="960" poster="docs/assets/klask-self-play-poster.png">
-  <source src="docs/assets/klask-self-play-5-episodes.mp4" type="video/mp4">
-</video>
+![Klask RL self-play demo](docs/assets/klask-self-play-5-episodes.gif)
 
-[Open the MP4 demo](docs/assets/klask-self-play-5-episodes.mp4)
+[Open the MP4 version](docs/assets/klask-self-play-5-episodes.mp4)
 
 The red and blue circles are the handles, the white circle is the puck, and the small gray
 circles are the magnets. The side panels show the current step reward, episode total, and
