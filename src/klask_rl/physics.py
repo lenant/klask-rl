@@ -55,6 +55,7 @@ class KlaskPhysics:
         self._magnet_attached_offsets: list[pymunk.Vec2d] = []
         self._magnet_contact_frames: list[dict[str, int]] = []
         self.paused = False
+        self.quit_requested = False
         self._screen: Any | None = None
         self._clock: Any | None = None
         arena_width = 900
@@ -82,15 +83,13 @@ class KlaskPhysics:
         self._magnet_attached_offsets = []
         self._magnet_contact_frames = []
         self.paused = False
+        self.quit_requested = False
 
         self._add_walls()
 
         puck_moment = pymunk.moment_for_circle(cfg.puck_mass, 0.0, cfg.puck_radius)
         self.puck_body = pymunk.Body(cfg.puck_mass, puck_moment)
-        self.puck_body.position = (
-            rng.uniform(-0.08, 0.08),
-            rng.uniform(-0.08, 0.08),
-        )
+        self.puck_body.position = self._sample_puck_start_position(rng)
         self.puck_body.velocity = (
             rng.uniform(-0.25, 0.25),
             rng.uniform(-0.25, 0.25),
@@ -100,10 +99,33 @@ class KlaskPhysics:
         self.puck_shape.friction = cfg.puck_friction
         self.space.add(self.puck_body, self.puck_shape)
 
-        self._add_handle("left", (-0.55, rng.uniform(-0.08, 0.08)))
-        self._add_handle("right", (0.55, rng.uniform(-0.08, 0.08)))
+        self._add_handle("left", self._sample_handle_start_position("left", rng))
+        self._add_handle("right", self._sample_handle_start_position("right", rng))
         for position in self._magnet_start_positions():
             self._add_magnet(position)
+
+    def _sample_puck_start_position(self, rng: np.random.Generator) -> tuple[float, float]:
+        cfg = self.config
+        min_x = cfg.width * cfg.puck_start_min_x_fraction
+        max_x = cfg.width * cfg.puck_start_max_x_fraction
+        side = -1.0 if rng.random() < 0.5 else 1.0
+        return (
+            side * rng.uniform(min_x, max_x),
+            rng.uniform(-0.08, 0.08),
+        )
+
+    def _sample_handle_start_position(self, agent: str, rng: np.random.Generator) -> tuple[float, float]:
+        cfg = self.config
+        preferred_x = -0.55 if agent == "left" else 0.55
+        preferred = pymunk.Vec2d(preferred_x, rng.uniform(-0.08, 0.08))
+        safe_position = self._non_overlapping_handle_position(
+            agent=agent,
+            current_position=preferred,
+            preferred_position=preferred,
+            puck_position=self.puck_body.position,
+            min_distance=cfg.puck_radius + cfg.handle_radius + 0.02,
+        )
+        return (safe_position.x, safe_position.y)
 
     def _add_walls(self) -> None:
         cfg = self.config
@@ -137,7 +159,7 @@ class KlaskPhysics:
         self.handle_shapes[agent] = shape
 
     def _magnet_start_positions(self) -> list[tuple[float, float]]:
-        positions = [(-0.18, -0.24), (0.18, -0.24), (0.0, 0.24)]
+        positions = [(0.0, -0.24), (0.0, 0.0), (0.0, 0.24)]
         return positions[: self.config.magnet_count]
 
     def _add_magnet(self, position: tuple[float, float]) -> None:
@@ -187,7 +209,9 @@ class KlaskPhysics:
             if scored_by is not None:
                 score_reason = "magnets"
                 break
+            self._apply_magnet_friction()
             self._limit_puck_speed()
+            self._limit_magnet_speeds()
             for agent in AGENTS:
                 contacts[agent] = contacts[agent] or self._is_touching(agent)
 
@@ -510,6 +534,23 @@ class KlaskPhysics:
         if speed > self.config.max_puck_speed:
             self.puck_body.velocity = velocity * (self.config.max_puck_speed / speed)
 
+    def _limit_magnet_speeds(self) -> None:
+        max_speed = self.config.max_magnet_speed
+        for index, body in enumerate(self.magnet_bodies):
+            if self.magnet_attached_to[index] is not None:
+                continue
+            speed = body.velocity.length
+            if speed > max_speed:
+                body.velocity = body.velocity * (max_speed / speed)
+
+    def _apply_magnet_friction(self) -> None:
+        multiplier = max(0.0, 1.0 - self.config.magnet_linear_friction * self.config.physics_dt)
+        for index, body in enumerate(self.magnet_bodies):
+            if self.magnet_attached_to[index] is not None:
+                continue
+            body.velocity = body.velocity * multiplier
+            body.angular_velocity *= multiplier
+
     def _is_touching(self, agent: str) -> bool:
         cfg = self.config
         delta = self.puck_body.position - self.handle_bodies[agent].position
@@ -561,6 +602,11 @@ class KlaskPhysics:
             surface = self._screen
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
+                    self.quit_requested = True
+                    self.close()
+                    return None
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    self.quit_requested = True
                     self.close()
                     return None
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:

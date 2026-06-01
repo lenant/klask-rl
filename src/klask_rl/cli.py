@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated
 
@@ -13,7 +14,8 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 
-from klask_rl.envs import SelfPlayKlaskEnv
+from klask_rl.config import AGENTS, OPPONENT, ArenaConfig
+from klask_rl.envs import KlaskParallelEnv, SelfPlayKlaskEnv
 from klask_rl.opponents import (
     HeuristicOpponent,
     OpponentPolicy,
@@ -31,6 +33,7 @@ train_app = typer.Typer(add_completion=False)
 eval_app = typer.Typer(add_completion=False)
 watch_app = typer.Typer(add_completion=False)
 benchmark_app = typer.Typer(add_completion=False)
+play_app = typer.Typer(add_completion=False)
 
 
 @dataclass(frozen=True)
@@ -370,6 +373,143 @@ def run_benchmark(
     return result
 
 
+def _scaled_world_action(x: float, y: float, action_scale: float) -> np.ndarray:
+    action = np.array([x, y], dtype=np.float32)
+    norm = float(np.linalg.norm(action))
+    if norm > 1.0:
+        action /= norm
+    return np.clip(action_scale, 0.0, 1.0) * action
+
+
+def _world_action_from_key_state(
+    is_pressed: Callable[[object], bool],
+    left_key: object,
+    right_key: object,
+    up_key: object,
+    down_key: object,
+    action_scale: float,
+) -> np.ndarray:
+    x = float(is_pressed(right_key)) - float(is_pressed(left_key))
+    y = float(is_pressed(up_key)) - float(is_pressed(down_key))
+    return _scaled_world_action(x, y, action_scale)
+
+
+def _poll_pygame_keys(pygame_module: object) -> object:
+    pygame_module.event.pump()
+    return pygame_module.key.get_pressed()
+
+
+def _human_world_action_from_keys(pygame_module: object, keys: object, action_scale: float) -> np.ndarray:
+    return _world_action_from_key_state(
+        keys.__getitem__,
+        pygame_module.K_a,
+        pygame_module.K_d,
+        pygame_module.K_w,
+        pygame_module.K_s,
+        action_scale,
+    )
+
+
+def _human_world_action(pygame_module: object, action_scale: float) -> np.ndarray:
+    keys = _poll_pygame_keys(pygame_module)
+    return _human_world_action_from_keys(pygame_module, keys, action_scale)
+
+
+def _key_is_pressed(keys: object, key: int) -> bool:
+    return bool(keys[key])
+
+
+def _human_action_to_canonical(human_side: str, world_action: np.ndarray) -> np.ndarray:
+    if human_side == "left":
+        return np.asarray(world_action, dtype=np.float32)
+    if human_side == "right":
+        return np.array([-world_action[0], world_action[1]], dtype=np.float32)
+    raise typer.BadParameter("human-side must be one of: left, right")
+
+
+def run_play(
+    model_path: Path,
+    human_side: str,
+    episodes: int,
+    seed: int,
+    max_steps: int | None,
+    deterministic: bool,
+    action_scale: float,
+) -> None:
+    if human_side not in AGENTS:
+        raise typer.BadParameter("human-side must be one of: left, right")
+
+    import pygame
+
+    model = PPO.load(model_path, device="cpu")
+    arena_config = ArenaConfig()
+    if max_steps is not None:
+        arena_config = replace(arena_config, max_steps=max_steps)
+    env = KlaskParallelEnv(arena_config=arena_config)
+    model_side = OPPONENT[human_side]
+    console.print(
+        {
+            "human_side": human_side,
+            "model_side": model_side,
+            "controls": "WASD",
+            "pause": "space",
+            "quit": "close window or Escape",
+        }
+    )
+
+    try:
+        for episode in range(episodes):
+            observations, infos = env.reset(seed=seed + episode)
+            done = False
+            final_info = infos[human_side]
+            env.render()
+            while not done and not env.physics.quit_requested:
+                keys = _poll_pygame_keys(pygame)
+                if _key_is_pressed(keys, pygame.K_ESCAPE):
+                    env.physics.quit_requested = True
+                    break
+
+                while env.physics.paused and not env.physics.quit_requested:
+                    time.sleep(env.arena_config.control_dt)
+                    env.render()
+                    keys = _poll_pygame_keys(pygame)
+                    if _key_is_pressed(keys, pygame.K_ESCAPE):
+                        env.physics.quit_requested = True
+                        break
+                if env.physics.quit_requested:
+                    break
+
+                human_action = _human_action_to_canonical(
+                    human_side,
+                    _human_world_action_from_keys(pygame, keys, action_scale),
+                )
+                model_action, _ = model.predict(observations[model_side], deterministic=deterministic)
+                actions = {
+                    human_side: human_action,
+                    model_side: np.asarray(model_action, dtype=np.float32),
+                }
+                observations, _, terminations, truncations, infos = env.step(actions)
+                final_info = infos.get(human_side, final_info)
+                env.render()
+                done = bool(terminations.get(human_side, False) or truncations.get(human_side, False))
+                time.sleep(env.arena_config.control_dt)
+
+            if env.physics.quit_requested:
+                break
+            console.print(
+                {
+                    "episode": episode + 1,
+                    "score": final_info.get("score", {}),
+                    "scored_by": final_info.get("scored_by"),
+                    "score_reason": final_info.get("score_reason"),
+                    "steps": final_info.get("steps"),
+                }
+            )
+            time.sleep(0.4)
+    finally:
+        env.close()
+
+
 @train_app.callback(invoke_without_command=True)
 def train_entry(
     total_steps: Annotated[int, typer.Option(help="Total PPO environment steps.")] = 100_000,
@@ -476,6 +616,23 @@ def benchmark_entry(
     run_benchmark(model, episodes, seed, deterministic, max_steps)
 
 
+@play_app.callback(invoke_without_command=True)
+def play_entry(
+    model: Annotated[Path, typer.Option(help="Path to a PPO .zip model.")],
+    human_side: Annotated[
+        str, typer.Option(help="Side controlled by WASD: left or right.")
+    ] = "left",
+    episodes: Annotated[int, typer.Option(help="Episodes to play.")] = 5,
+    seed: Annotated[int, typer.Option(help="Random seed.")] = 17,
+    max_steps: Annotated[
+        int | None, typer.Option(help="Optional max steps per played episode.")
+    ] = 450,
+    deterministic: Annotated[bool, typer.Option(help="Use deterministic model actions.")] = True,
+    action_scale: Annotated[float, typer.Option(help="Human action strength, 0.0 to 1.0.")] = 1.0,
+) -> None:
+    run_play(model, human_side, episodes, seed, max_steps, deterministic, action_scale)
+
+
 @app.command()
 def train(
     total_steps: int = 100_000,
@@ -560,6 +717,19 @@ def benchmark(
     run_benchmark(model, episodes, seed, deterministic, max_steps)
 
 
+@app.command()
+def play(
+    model: Path,
+    human_side: str = "left",
+    episodes: int = 5,
+    seed: int = 17,
+    max_steps: int | None = 450,
+    deterministic: bool = True,
+    action_scale: float = 1.0,
+) -> None:
+    run_play(model, human_side, episodes, seed, max_steps, deterministic, action_scale)
+
+
 def main() -> None:
     app()
 
@@ -578,3 +748,7 @@ def watch_main() -> None:
 
 def benchmark_main() -> None:
     benchmark_app()
+
+
+def play_main() -> None:
+    play_app()

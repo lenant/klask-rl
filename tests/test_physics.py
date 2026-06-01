@@ -111,6 +111,28 @@ def test_magnets_are_created_inside_arena() -> None:
         assert -cfg.half_height + cfg.magnet_radius <= body.position.y <= cfg.half_height - cfg.magnet_radius
 
 
+def test_magnets_start_on_center_line() -> None:
+    physics = KlaskPhysics()
+
+    assert [body.position.x for body in physics.magnet_bodies] == [0.0, 0.0, 0.0]
+    assert [body.position.y for body in physics.magnet_bodies] == [-0.24, 0.0, 0.24]
+
+
+def test_puck_starts_on_left_or_right_quarter_without_handle_overlap() -> None:
+    physics = KlaskPhysics()
+    cfg = physics.config
+    min_x = cfg.width * cfg.puck_start_min_x_fraction
+    max_x = cfg.width * cfg.puck_start_max_x_fraction
+    min_handle_distance = cfg.puck_radius + cfg.handle_radius
+
+    for seed in range(30):
+        physics.reset(seed=seed)
+        puck_position = physics.puck_body.position
+        assert min_x <= abs(puck_position.x) <= max_x
+        for body in physics.handle_bodies.values():
+            assert (body.position - puck_position).length >= min_handle_distance
+
+
 def test_magnet_attraction_fades_with_distance() -> None:
     physics = KlaskPhysics()
     cfg = physics.config
@@ -120,6 +142,39 @@ def test_magnet_attraction_fades_with_distance() -> None:
 
     assert near_force > far_force > 0.0
     assert physics._magnet_attraction_force(cfg.magnet_attraction_range + 0.01) == 0.0
+
+
+def test_far_magnet_does_not_chase_handler() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=6)
+    cfg = physics.config
+    physics.handle_bodies["left"].position = (-0.4, 0.0)
+    physics.handle_bodies["left"].velocity = (0.0, 0.0)
+    physics.handle_bodies["right"].position = (0.8, 0.0)
+    physics.magnet_bodies[0].position = (-0.4 + cfg.magnet_attraction_range + 0.04, 0.0)
+    physics.magnet_bodies[0].velocity = (0.0, 0.0)
+
+    initial_position = np.array(physics.magnet_bodies[0].position)
+    physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+
+    final_position = np.array(physics.magnet_bodies[0].position)
+    assert np.linalg.norm(final_position - initial_position) < 1e-6
+
+
+def test_free_magnet_slows_down_without_attraction() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=6)
+    physics.handle_bodies["left"].position = (-0.85, 0.45)
+    physics.handle_bodies["right"].position = (0.85, -0.45)
+    physics.magnet_bodies[0].position = (0.0, 0.0)
+    physics.magnet_bodies[0].velocity = (1.0, 0.0)
+
+    initial_speed = physics.magnet_bodies[0].velocity.length
+    for _ in range(20):
+        physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+    final_speed = physics.magnet_bodies[0].velocity.length
+
+    assert final_speed < initial_speed * 0.35
 
 
 def test_handler_can_run_away_from_nearby_magnet() -> None:
@@ -143,7 +198,7 @@ def test_nearby_magnet_moves_toward_stationary_handler() -> None:
     physics.reset(seed=8)
     physics.handle_bodies["left"].position = (-0.4, 0.0)
     physics.handle_bodies["right"].position = (0.8, 0.0)
-    physics.magnet_bodies[0].position = (-0.15, 0.0)
+    physics.magnet_bodies[0].position = (-0.24, 0.0)
     physics.magnet_bodies[0].velocity = (0.0, 0.0)
 
     initial_distance = (physics.magnet_bodies[0].position - physics.handle_bodies["left"].position).length
@@ -159,6 +214,8 @@ def test_sustained_contact_marks_magnet_attached() -> None:
     physics.reset(seed=9)
     cfg = physics.config
     handle_position = (-0.4, 0.0)
+    physics.puck_body.position = (0.3, 0.45)
+    physics.puck_body.velocity = (0.0, 0.0)
     physics.handle_bodies["left"].position = handle_position
     physics.magnet_bodies[0].position = (handle_position[0] + cfg.handle_radius + cfg.magnet_radius, 0.0)
     physics.magnet_bodies[0].velocity = (0.0, 0.0)
@@ -194,6 +251,8 @@ def test_two_attached_magnets_score_for_opponent() -> None:
     physics.reset(seed=11)
     cfg = physics.config
     handle_position = (-0.4, 0.0)
+    physics.puck_body.position = (0.3, 0.45)
+    physics.puck_body.velocity = (0.0, 0.0)
     physics.handle_bodies["left"].position = handle_position
     physics.magnet_bodies[0].position = (handle_position[0] + cfg.handle_radius + cfg.magnet_radius, 0.0)
     physics.magnet_bodies[1].position = (handle_position[0], cfg.handle_radius + cfg.magnet_radius)
