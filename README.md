@@ -1,56 +1,183 @@
-# klask-rl
+# Klask RL
 
-Magnet-free Klask-like aero hockey simulator for reinforcement learning.
+Klask RL is a small reinforcement-learning playground for a Klask-inspired table game.
+It is currently closer to fast air hockey than full physical Klask: two handles move on
+their own halves of the board, push a puck toward the opposite goal, and must avoid three
+magnetic biscuits that can attach to a handle.
 
-The project exposes a Pymunk physics model, a PettingZoo parallel two-agent
-environment, and a Gymnasium self-play wrapper that trains one shared
-Stable-Baselines3 PPO policy from mirrored observations.
+The repository contains:
 
-## Quick start
+- a Pymunk physics simulator with pygame rendering;
+- PettingZoo and Gymnasium environments;
+- Stable-Baselines3 PPO self-play training;
+- benchmark scripts for comparing checkpoints;
+- a simple model-vs-model and human-vs-model viewer.
+
+## Demo
+
+Five self-play episodes recorded from the current PPO leader:
+
+<video controls muted playsinline width="960" poster="docs/assets/klask-self-play-poster.png">
+  <source src="docs/assets/klask-self-play-5-episodes.mp4" type="video/mp4">
+</video>
+
+[Open the MP4 demo](docs/assets/klask-self-play-5-episodes.mp4)
+
+The red and blue circles are the handles, the white circle is the puck, and the small gray
+circles are the magnets. The side panels show the current step reward, episode total, and
+every reward component for each side.
+
+## Setup
+
+Use Python 3.11 or newer. The project is managed with `uv`.
 
 ```bash
 uv sync
 uv run pytest
-uv run klask-train --total-steps 1000 --num-envs 2 --n-steps 64 --batch-size 64
-uv run klask-eval --model runs/klask/latest/final_model.zip --opponent random
-uv run klask-watch --model runs/klask/latest/final_model.zip --self-play
-uv run klask-benchmark --model runs/klask/latest/final_model.zip
 ```
 
-The environment is intentionally closer to air hockey than full Klask v1:
-there are two handles, one puck, walls, goals, and no magnets or biscuits.
+`ffmpeg` is only required if you want to record new videos.
 
-## Current trained checkpoint
+## Watch A Model
 
-A local PPO checkpoint is written by training to `runs/klask/latest/final_model.zip`.
-The `runs/` directory is ignored because checkpoints and TensorBoard logs are
-generated artifacts.
+Trained checkpoints and logs are generated artifacts and are ignored by git. The current
+local leader is expected at `runs/klask/latest/simple_leader.zip` after copying or training
+a model.
 
-The latest local run used:
+Model vs model:
 
 ```bash
-uv run klask-train --total-steps 180000 --num-envs 8 --n-steps 256 \
-  --batch-size 512 --snapshot-freq 30000 --max-steps 450 \
-  --reward-profile possession --bc-samples 12000 --bc-epochs 8
+uv run klask-watch --model runs/klask/latest/simple_leader.zip --self-play --reward-profile simple
 ```
 
-Evaluation commands:
+Human vs model:
 
 ```bash
-uv run klask-eval --model runs/klask/latest/final_model.zip --episodes 30 --opponent passive
-uv run klask-eval --model runs/klask/latest/final_model.zip --episodes 30 --opponent random
-uv run klask-eval --model runs/klask/latest/final_model.zip --episodes 30 --opponent heuristic
-uv run klask-eval --model runs/klask/latest/final_model.zip --episodes 30 --self-play
+uv run klask-play --model runs/klask/latest/simple_leader.zip --human-side left --reward-profile simple
 ```
 
-`klask-watch` defaults to `--self-play`, so both handles are controlled by the
-same trained mirrored policy. `klask-benchmark` runs passive, random, heuristic,
-and self-play matchups and reports quality metrics: goal margin, goals per game,
-draw rate, defense rate, contact activity, territory, and aggregate quality.
+Controls in human mode:
 
-Training supports reward profiles with `--reward-profile balanced|aggressive|defensive|possession`.
-The default profile is `possession` and uses behavior-cloning warm start samples
-from an active striker expert before PPO self-play.
+- `W`, `A`, `S`, `D` move the human handle.
+- `Space` pauses and resumes the episode.
+- `Escape` or closing the window exits.
 
-The best current checkpoint was selected from the possession reward sweep and is
-documented in `reports/reward_experiments.md`.
+## Train
+
+For a quick smoke run:
+
+```bash
+uv run klask-train --total-steps 10000 --num-envs 2 --n-steps 128 \
+  --batch-size 128 --snapshot-freq 5000 --reward-profile simple
+```
+
+The current stronger setup uses a larger PPO network, behavior-cloning warm start, parallel
+self-play environments, simple reward, and automatic snapshots:
+
+```bash
+uv run klask-train --total-steps 5000000 --num-envs 16 --n-steps 1024 \
+  --batch-size 1024 --snapshot-freq 100000 --max-steps 450 \
+  --reward-profile simple --bc-samples 12000 --bc-epochs 8 \
+  --bc-batch-size 512 --vec-env subproc --device cuda \
+  --policy-net-arch 256x256x256 \
+  --output-dir runs/remote_simple_ppo_256x3_5m
+```
+
+Use `--device cpu` or `--device auto` on machines without CUDA.
+
+Training writes checkpoints under:
+
+- `runs/.../latest/final_model.zip`
+- `runs/.../latest/snapshots/policy_<step>.zip`
+- `runs/.../tensorboard/`
+
+## Evaluate
+
+Evaluate against one opponent:
+
+```bash
+uv run klask-eval --model runs/klask/latest/simple_leader.zip \
+  --opponent heuristic --episodes 30 --reward-profile simple
+```
+
+Run the built-in benchmark suite:
+
+```bash
+uv run klask-benchmark --model runs/klask/latest/simple_leader.zip \
+  --episodes 20 --reward-profile simple
+```
+
+`klask-benchmark` tests passive, random, heuristic, and self-play matchups. The aggregate
+quality score combines attack, defense, contact activity, territory, and decisiveness.
+
+During long training runs, benchmark snapshots automatically and keep only new leaders:
+
+```bash
+PYTHONPATH=src uv run python scripts/benchmark_snapshots.py \
+  --snapshot-dir runs/remote_simple_ppo_256x3_5m/latest/snapshots \
+  --csv runs/remote_simple_ppo_256x3_5m/benchmark_results.csv \
+  --leader-dir runs/remote_simple_ppo_256x3_5m/leaders \
+  --leader-copy runs/klask/latest/simple_leader.zip \
+  --episodes 20 --reward-profile simple
+```
+
+The best 5M-step run so far used `--policy-net-arch 256x256x256` with the simple reward
+profile. Its final leader reached aggregate quality `5.393`, with `33` goals for and `1`
+goal against across the four 20-episode benchmark matchups.
+
+## Reward Profile
+
+The current recommended training profile is `simple`. Pass it explicitly to training,
+because the training CLI still defaults to the older `possession` profile.
+
+`simple` gives:
+
+- `+12 / -12` terminal reward for scoring or conceding;
+- `-2.0` once when a new magnet attaches to the handle;
+- up to `-0.05` per step while an unattached magnet is pulling toward the handle, scaled by
+  closeness;
+- `-0.01` per step while the puck is on the player's own side;
+- `0` reward when the puck is on the other side, unless one of the rules above applies.
+
+Older reward profiles (`balanced`, `aggressive`, `defensive`, and `possession`) remain in
+the code for experiments.
+
+## Model Inputs
+
+Both sides use the same policy. Observations are mirrored so the learning side always sees
+itself as playing left to right.
+
+The observation vector has 33 floats:
+
+- own handle position and velocity;
+- opponent handle position and velocity;
+- puck position, velocity, and relative vector from the own handle;
+- score difference and time remaining;
+- for each of the three magnets: position, velocity, and attachment state;
+- own and opponent magnet attachment counts.
+
+The action is a 2D continuous vector in `[-1, 1]` that controls handle movement.
+
+The current leader uses Stable-Baselines3 PPO with an `MlpPolicy` and hidden layers
+`256x256x256` for the policy and value networks.
+
+## Record A Demo
+
+Record five model-vs-model episodes to an MP4:
+
+```bash
+PYTHONPATH=src uv run python scripts/record_demo.py \
+  --model runs/klask/latest/simple_leader.zip \
+  --output docs/assets/klask-self-play-5-episodes.mp4 \
+  --episodes 5 --reward-profile simple
+```
+
+## Project Layout
+
+- `src/klask_rl/physics.py` contains the board physics and renderer.
+- `src/klask_rl/envs.py` contains the PettingZoo and Gymnasium environments.
+- `src/klask_rl/cli.py` contains training, evaluation, watch, benchmark, and play commands.
+- `src/klask_rl/opponents.py` contains passive, random, heuristic, striker, and checkpoint opponents.
+- `src/klask_rl/training.py` contains the behavior-cloning warm start.
+- `scripts/benchmark_snapshots.py` evaluates snapshots and copies new leaders.
+- `scripts/record_demo.py` records self-play videos.
