@@ -53,6 +53,55 @@ class RewardConfig:
     action_penalty: float = 0.0003
 
 
+REWARD_PROFILES: dict[str, RewardConfig] = {
+    "balanced": RewardConfig(),
+    "aggressive": RewardConfig(
+        terminal_goal=14.0,
+        progress=0.9,
+        puck_position=0.04,
+        puck_speed=0.14,
+        contact=0.12,
+        puck_distance=0.035,
+        defense=0.025,
+        own_goal_danger=0.035,
+        time_penalty=0.0002,
+        action_penalty=0.00015,
+    ),
+    "defensive": RewardConfig(
+        terminal_goal=14.0,
+        progress=0.45,
+        puck_position=0.01,
+        puck_speed=0.05,
+        contact=0.07,
+        puck_distance=0.03,
+        defense=0.09,
+        own_goal_danger=0.12,
+        time_penalty=0.0003,
+        action_penalty=0.0002,
+    ),
+    "possession": RewardConfig(
+        terminal_goal=12.0,
+        progress=0.55,
+        puck_position=0.02,
+        puck_speed=0.08,
+        contact=0.18,
+        puck_distance=0.07,
+        defense=0.045,
+        own_goal_danger=0.06,
+        time_penalty=0.0002,
+        action_penalty=0.0001,
+    ),
+}
+
+
+def reward_profile(name: str) -> RewardConfig:
+    try:
+        return REWARD_PROFILES[name]
+    except KeyError as exc:
+        known = ", ".join(sorted(REWARD_PROFILES))
+        raise ValueError(f"unknown reward profile {name!r}; expected one of: {known}") from exc
+
+
 AGENTS: tuple[str, str] = ("left", "right")
 OPPONENT: dict[str, str] = {"left": "right", "right": "left"}
 OBSERVATION_SIZE = 16

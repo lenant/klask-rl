@@ -34,6 +34,32 @@ class HeuristicOpponent:
         return np.clip(action * self.aggression, -1.0, 1.0)
 
 
+class StrikerOpponent:
+    """Aggressive expert used for behavior-cloning warm starts and baselines."""
+
+    def __init__(self, aggression: float = 5.0) -> None:
+        self.aggression = aggression
+
+    def act(self, observation: np.ndarray) -> np.ndarray:
+        own_x, own_y = observation[0], observation[1]
+        puck_x, puck_y = observation[8], observation[9]
+        puck_vx = observation[10]
+
+        danger = puck_x < -0.55 and abs(puck_y) < 0.72
+        if danger and puck_vx < 0.0:
+            target_x = np.clip(puck_x - 0.10, -0.88, -0.18)
+            target_y = np.clip(puck_y, -0.78, 0.78)
+        elif puck_x > 0.0:
+            target_x = -0.08
+            target_y = np.clip(puck_y, -0.82, 0.82)
+        else:
+            target_x = np.clip(puck_x - 0.14, -0.88, -0.08)
+            target_y = np.clip(puck_y, -0.82, 0.82)
+
+        action = np.array([target_x - own_x, target_y - own_y], dtype=np.float32)
+        return np.clip(action * self.aggression, -1.0, 1.0)
+
+
 class PassiveOpponent:
     def act(self, observation: np.ndarray) -> np.ndarray:
         del observation

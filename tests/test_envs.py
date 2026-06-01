@@ -31,3 +31,10 @@ def test_reset_is_deterministic_for_same_seed() -> None:
     obs_b, _ = env_b.reset(seed=123)
     np.testing.assert_allclose(obs_a["left"], obs_b["left"])
     np.testing.assert_allclose(obs_a["right"], obs_b["right"])
+
+
+def test_reward_profiles_change_reward_weights() -> None:
+    balanced = KlaskParallelEnv(reward_profile="balanced")
+    aggressive = KlaskParallelEnv(reward_profile="aggressive")
+    assert aggressive.reward_config.progress > balanced.reward_config.progress
+    assert aggressive.reward_config.terminal_goal > balanced.reward_config.terminal_goal

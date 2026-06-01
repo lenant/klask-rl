@@ -9,6 +9,7 @@ from gymnasium import spaces
 from pettingzoo.utils.env import ParallelEnv
 
 from klask_rl.config import AGENTS, OBSERVATION_SIZE, OPPONENT, ArenaConfig, RewardConfig
+from klask_rl.config import reward_profile as get_reward_profile
 from klask_rl.opponents import HeuristicOpponent, OpponentPolicy
 from klask_rl.physics import KlaskPhysics
 
@@ -21,9 +22,10 @@ class KlaskParallelEnv(ParallelEnv):
         arena_config: ArenaConfig | None = None,
         reward_config: RewardConfig | None = None,
         render_mode: str | None = None,
+        reward_profile: str = "balanced",
     ) -> None:
         self.arena_config = arena_config or ArenaConfig()
-        self.reward_config = reward_config or RewardConfig()
+        self.reward_config = reward_config or get_reward_profile(reward_profile)
         self.render_mode = render_mode
         self.physics = KlaskPhysics(self.arena_config)
         self.possible_agents = list(AGENTS)
@@ -222,11 +224,12 @@ class SelfPlayKlaskEnv(gym.Env):
         render_mode: str | None = None,
         randomize_side: bool = True,
         max_steps: int | None = None,
+        reward_profile: str = "balanced",
     ) -> None:
         arena_config = arena_config or ArenaConfig()
         if max_steps is not None:
             arena_config = replace(arena_config, max_steps=max_steps)
-        self.base_env = KlaskParallelEnv(arena_config, reward_config, render_mode)
+        self.base_env = KlaskParallelEnv(arena_config, reward_config, render_mode, reward_profile)
         self.opponent = opponent or HeuristicOpponent()
         self.randomize_side = randomize_side
         self.learning_side = "left"

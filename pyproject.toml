@@ -25,6 +25,7 @@ klask-rl = "klask_rl.cli:main"
 klask-train = "klask_rl.cli:train_main"
 klask-eval = "klask_rl.cli:eval_main"
 klask-watch = "klask_rl.cli:watch_main"
+klask-benchmark = "klask_rl.cli:benchmark_main"
 
 [build-system]
 requires = ["hatchling"]

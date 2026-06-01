@@ -13,7 +13,8 @@ uv sync
 uv run pytest
 uv run klask-train --total-steps 1000 --num-envs 2 --n-steps 64 --batch-size 64
 uv run klask-eval --model runs/klask/latest/final_model.zip --opponent random
-uv run klask-watch --model runs/klask/latest/final_model.zip --opponent heuristic
+uv run klask-watch --model runs/klask/latest/final_model.zip --self-play
+uv run klask-benchmark --model runs/klask/latest/final_model.zip
 ```
 
 The environment is intentionally closer to air hockey than full Klask v1:
@@ -38,4 +39,14 @@ Evaluation commands:
 uv run klask-eval --model runs/klask/latest/final_model.zip --episodes 30 --opponent passive
 uv run klask-eval --model runs/klask/latest/final_model.zip --episodes 30 --opponent random
 uv run klask-eval --model runs/klask/latest/final_model.zip --episodes 30 --opponent heuristic
+uv run klask-eval --model runs/klask/latest/final_model.zip --episodes 30 --self-play
 ```
+
+`klask-watch` defaults to `--self-play`, so both handles are controlled by the
+same trained mirrored policy. `klask-benchmark` runs passive, random, heuristic,
+and self-play matchups and reports quality metrics: goal margin, goals per game,
+draw rate, defense rate, contact activity, territory, and aggregate quality.
+
+Training supports reward profiles with `--reward-profile balanced|aggressive|defensive|possession`.
+The default profile is `aggressive` and uses behavior-cloning warm start samples
+from an active striker expert before PPO self-play.
