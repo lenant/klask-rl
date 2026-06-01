@@ -81,3 +81,21 @@ def test_handle_overlap_is_resolved_when_puck_blocks_corner_escape_direction() -
 
     separation = (physics.handle_bodies["left"].position - physics.puck_body.position).length
     assert separation >= cfg.puck_radius + cfg.handle_radius - 1e-6
+
+
+def test_space_toggles_pause_in_human_render(monkeypatch) -> None:
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    import pygame
+
+    physics = KlaskPhysics()
+    physics.render("human")
+
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE))
+    physics.render("human")
+    assert physics.paused
+
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE))
+    physics.render("human")
+    assert not physics.paused
+
+    physics.close()

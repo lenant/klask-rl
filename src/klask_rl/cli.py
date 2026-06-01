@@ -298,6 +298,9 @@ def run_eval(
             done = terminated or truncated
             if render:
                 env.render()
+                while env.base_env.physics.paused:
+                    time.sleep(env.base_env.arena_config.control_dt)
+                    env.render()
                 time.sleep(env.base_env.arena_config.control_dt)
         scored_by = final_info.get("scored_by")
         learning_side = final_info.get("learning_side")

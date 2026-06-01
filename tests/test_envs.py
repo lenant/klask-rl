@@ -5,7 +5,7 @@ from pettingzoo.test import parallel_api_test
 from stable_baselines3.common.env_checker import check_env
 
 from klask_rl.config import AGENTS
-from klask_rl.envs import KlaskParallelEnv, SelfPlayKlaskEnv
+from klask_rl.envs import REWARD_COMPONENTS, KlaskParallelEnv, SelfPlayKlaskEnv
 from klask_rl.opponents import HeuristicOpponent
 
 
@@ -52,6 +52,9 @@ def test_reward_overlay_tracks_step_and_episode_rewards() -> None:
     for agent in AGENTS:
         assert infos[agent]["rewards"][agent] == rewards_2[agent]
         assert infos[agent]["episode_rewards"][agent] == rewards_1[agent] + rewards_2[agent]
+        components = infos[agent]["reward_components"][agent]
+        assert tuple(components) == REWARD_COMPONENTS
+        assert sum(components.values()) == rewards_2[agent]
 
     frame = env.render()
     assert frame is not None

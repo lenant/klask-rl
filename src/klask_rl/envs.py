@@ -14,6 +14,20 @@ from klask_rl.opponents import HeuristicOpponent, OpponentPolicy
 from klask_rl.physics import KlaskPhysics
 
 
+REWARD_COMPONENTS: tuple[str, ...] = (
+    "progress",
+    "position",
+    "speed",
+    "contact",
+    "distance",
+    "defense",
+    "danger",
+    "time",
+    "action",
+    "terminal",
+)
+
+
 class KlaskParallelEnv(ParallelEnv):
     metadata = {"render_modes": ["human", "rgb_array"], "name": "klask_parallel_v0"}
 
@@ -41,6 +55,9 @@ class KlaskParallelEnv(ParallelEnv):
         self.scores = {agent: 0 for agent in AGENTS}
         self.last_rewards = {agent: 0.0 for agent in AGENTS}
         self.episode_rewards = {agent: 0.0 for agent in AGENTS}
+        self.last_reward_components = {
+            agent: {component: 0.0 for component in REWARD_COMPONENTS} for agent in AGENTS
+        }
 
     def observation_space(self, agent: str) -> spaces.Box:
         return self.observation_spaces[agent]
@@ -60,6 +77,9 @@ class KlaskParallelEnv(ParallelEnv):
         self.scores = {agent: 0 for agent in AGENTS}
         self.last_rewards = {agent: 0.0 for agent in AGENTS}
         self.episode_rewards = {agent: 0.0 for agent in AGENTS}
+        self.last_reward_components = {
+            agent: {component: 0.0 for component in REWARD_COMPONENTS} for agent in AGENTS
+        }
         observations = {agent: self._make_observation(agent) for agent in self.agents}
         infos = {agent: {"score": self.scores.copy()} for agent in self.agents}
         return observations, infos
@@ -94,8 +114,8 @@ class KlaskParallelEnv(ParallelEnv):
         if result.scored_by is not None:
             self.scores[result.scored_by] += 1
 
-        own_terms = {
-            agent: self._shaping_reward(
+        own_components = {
+            agent: self._shaping_reward_components(
                 agent=agent,
                 previous_puck_x=previous_puck_x[agent],
                 action=canonical_actions[agent],
@@ -103,13 +123,27 @@ class KlaskParallelEnv(ParallelEnv):
             )
             for agent in active_agents
         }
-        rewards = {
-            agent: own_terms[agent] - own_terms[OPPONENT[agent]] for agent in active_agents
+        reward_components = {
+            agent: {
+                component: own_components[agent][component] - own_components[OPPONENT[agent]][component]
+                for component in REWARD_COMPONENTS
+            }
+            for agent in active_agents
         }
         if result.scored_by is not None:
-            rewards[result.scored_by] += self.reward_config.terminal_goal
-            rewards[OPPONENT[result.scored_by]] -= self.reward_config.terminal_goal
+            reward_components[result.scored_by]["terminal"] += self.reward_config.terminal_goal
+            reward_components[OPPONENT[result.scored_by]]["terminal"] -= self.reward_config.terminal_goal
+        rewards = {
+            agent: float(sum(reward_components[agent].values())) for agent in active_agents
+        }
         self.last_rewards = {agent: float(rewards.get(agent, 0.0)) for agent in AGENTS}
+        self.last_reward_components = {
+            agent: {
+                component: float(reward_components.get(agent, {}).get(component, 0.0))
+                for component in REWARD_COMPONENTS
+            }
+            for agent in AGENTS
+        }
         for agent in active_agents:
             self.episode_rewards[agent] += self.last_rewards[agent]
 
@@ -126,6 +160,10 @@ class KlaskParallelEnv(ParallelEnv):
                 "steps": self.steps,
                 "rewards": self.last_rewards.copy(),
                 "episode_rewards": self.episode_rewards.copy(),
+                "reward_components": {
+                    side: components.copy()
+                    for side, components in self.last_reward_components.items()
+                },
             }
             for agent in active_agents
         }
@@ -179,13 +217,13 @@ class KlaskParallelEnv(ParallelEnv):
             return clipped
         return np.array([-clipped[0], clipped[1]], dtype=np.float32)
 
-    def _shaping_reward(
+    def _shaping_reward_components(
         self,
         agent: str,
         previous_puck_x: float,
         action: np.ndarray,
         contact: bool,
-    ) -> float:
+    ) -> dict[str, float]:
         obs = self._make_observation(agent)
         puck_x = float(obs[8])
         puck_y = float(obs[9])
@@ -203,16 +241,35 @@ class KlaskParallelEnv(ParallelEnv):
         defense = self.reward_config.defense * defensive_need * y_alignment
         goal_danger = self.reward_config.own_goal_danger * defensive_need * (1.0 - abs(puck_y))
         action_cost = self.reward_config.action_penalty * float(np.dot(action, action))
-        return (
-            progress
-            + position
-            + speed
-            + contact_bonus
-            + distance_bonus
-            + defense
-            - goal_danger
-            - self.reward_config.time_penalty
-            - action_cost
+        return {
+            "progress": progress,
+            "position": position,
+            "speed": speed,
+            "contact": contact_bonus,
+            "distance": distance_bonus,
+            "defense": defense,
+            "danger": -goal_danger,
+            "time": -self.reward_config.time_penalty,
+            "action": -action_cost,
+            "terminal": 0.0,
+        }
+
+    def _shaping_reward(
+        self,
+        agent: str,
+        previous_puck_x: float,
+        action: np.ndarray,
+        contact: bool,
+    ) -> float:
+        return float(
+            sum(
+                self._shaping_reward_components(
+                    agent=agent,
+                    previous_puck_x=previous_puck_x,
+                    action=action,
+                    contact=contact,
+                ).values()
+            )
         )
 
     def render(self) -> np.ndarray | None:
@@ -220,6 +277,7 @@ class KlaskParallelEnv(ParallelEnv):
             agent: {
                 "step": self.last_rewards[agent],
                 "episode": self.episode_rewards[agent],
+                "components": self.last_reward_components[agent].copy(),
             }
             for agent in AGENTS
         }

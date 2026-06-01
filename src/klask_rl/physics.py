@@ -15,7 +15,20 @@ class PhysicsStepResult:
     contacts: dict[str, bool]
 
 
-RewardOverlay = dict[str, dict[str, float]]
+RewardOverlay = dict[str, dict[str, Any]]
+
+REWARD_COMPONENT_LABELS: tuple[tuple[str, str], ...] = (
+    ("progress", "progress"),
+    ("position", "position"),
+    ("speed", "speed"),
+    ("contact", "contact"),
+    ("distance", "distance"),
+    ("defense", "defense"),
+    ("danger", "danger"),
+    ("time", "time"),
+    ("action", "action"),
+    ("terminal", "terminal"),
+)
 
 
 class KlaskPhysics:
@@ -32,10 +45,11 @@ class KlaskPhysics:
         self.puck_shape: pymunk.Circle
         self.handle_bodies: dict[str, pymunk.Body] = {}
         self.handle_shapes: dict[str, pymunk.Circle] = {}
+        self.paused = False
         self._screen: Any | None = None
         self._clock: Any | None = None
         arena_width = 900
-        self._panel_width = 170
+        self._panel_width = 230
         self._panel_gap = 12
         self._arena_size = (arena_width, int(arena_width * self.config.height / self.config.width))
         self._surface_size = (
@@ -52,6 +66,7 @@ class KlaskPhysics:
         self.space.damping = cfg.damping
         self.handle_bodies = {}
         self.handle_shapes = {}
+        self.paused = False
 
         self._add_walls()
 
@@ -311,6 +326,8 @@ class KlaskPhysics:
                 if event.type == pygame.QUIT:
                     self.close()
                     return None
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
+                    self.paused = not self.paused
         else:
             surface = pygame.Surface((width, height))
 
@@ -359,6 +376,8 @@ class KlaskPhysics:
         )
         if reward_overlay is not None:
             self._draw_reward_overlay(pygame, surface, reward_overlay)
+        if self.paused:
+            self._draw_pause_indicator(pygame, surface)
 
         if mode == "human":
             pygame.display.flip()
@@ -374,11 +393,12 @@ class KlaskPhysics:
             pygame.display.quit()
             self._screen = None
             self._clock = None
+            self.paused = False
 
     def _draw_reward_overlay(self, pygame: Any, surface: Any, reward_overlay: RewardOverlay) -> None:
         pygame.font.init()
         height = self._surface_size[1]
-        panel_height = 150
+        panel_height = height - 32
         panel_y = (height - panel_height) // 2
         left_rect = pygame.Rect(8, panel_y, self._panel_width - 16, panel_height)
         right_rect = pygame.Rect(
@@ -387,28 +407,54 @@ class KlaskPhysics:
             self._panel_width - 16,
             panel_height,
         )
-        title_font = pygame.font.SysFont("Arial", 20, bold=True)
-        label_font = pygame.font.SysFont("Arial", 15)
-        value_font = pygame.font.SysFont("Arial", 22, bold=True)
+        title_font = pygame.font.SysFont("Arial", 18, bold=True)
+        label_font = pygame.font.SysFont("Arial", 13)
+        value_font = pygame.font.SysFont("Arial", 13, bold=True)
+        total_font = pygame.font.SysFont("Arial", 18, bold=True)
 
         def draw_panel(agent: str, rect: Any, color: tuple[int, int, int]) -> None:
             values = reward_overlay.get(agent, {})
             step_reward = float(values.get("step", 0.0))
             episode_reward = float(values.get("episode", 0.0))
+            components = values.get("components", {})
             pygame.draw.rect(surface, (30, 36, 42), rect, border_radius=6)
             pygame.draw.rect(surface, color, rect, width=2, border_radius=6)
 
             title = title_font.render(agent.upper(), True, color)
             step_label = label_font.render("step reward", True, (190, 200, 204))
             episode_label = label_font.render("episode total", True, (190, 200, 204))
-            step_value = value_font.render(f"{step_reward:+.3f}", True, (242, 245, 242))
-            episode_value = value_font.render(f"{episode_reward:+.2f}", True, (242, 245, 242))
+            step_value = total_font.render(f"{step_reward:+.3f}", True, (242, 245, 242))
+            episode_value = total_font.render(f"{episode_reward:+.2f}", True, (242, 245, 242))
 
             surface.blit(title, (rect.x + 14, rect.y + 12))
-            surface.blit(step_label, (rect.x + 14, rect.y + 48))
-            surface.blit(step_value, (rect.x + 14, rect.y + 66))
-            surface.blit(episode_label, (rect.x + 14, rect.y + 98))
-            surface.blit(episode_value, (rect.x + 14, rect.y + 116))
+            surface.blit(step_label, (rect.x + 14, rect.y + 42))
+            surface.blit(step_value, (rect.x + 14, rect.y + 58))
+            surface.blit(episode_label, (rect.x + 14, rect.y + 84))
+            surface.blit(episode_value, (rect.x + 14, rect.y + 100))
+
+            divider_y = rect.y + 132
+            pygame.draw.line(surface, (76, 86, 94), (rect.x + 12, divider_y), (rect.right - 12, divider_y), 1)
+            row_y = divider_y + 14
+            row_height = 31
+            for component, label in REWARD_COMPONENT_LABELS:
+                value = float(components.get(component, 0.0)) if isinstance(components, dict) else 0.0
+                label_surface = label_font.render(label, True, (184, 194, 200))
+                value_surface = value_font.render(f"{value:+.3f}", True, (238, 241, 238))
+                surface.blit(label_surface, (rect.x + 14, row_y))
+                surface.blit(value_surface, (rect.right - value_surface.get_width() - 14, row_y))
+                row_y += row_height
 
         draw_panel("left", left_rect, (235, 81, 75))
         draw_panel("right", right_rect, (74, 126, 234))
+
+    def _draw_pause_indicator(self, pygame: Any, surface: Any) -> None:
+        font = pygame.font.SysFont("Arial", 28, bold=True)
+        label = font.render("PAUSED", True, (242, 245, 242))
+        padding_x = 20
+        padding_y = 10
+        rect = label.get_rect()
+        rect.center = (self._surface_size[0] // 2, 34)
+        background = rect.inflate(padding_x * 2, padding_y * 2)
+        pygame.draw.rect(surface, (18, 22, 28), background, border_radius=6)
+        pygame.draw.rect(surface, (238, 232, 212), background, width=1, border_radius=6)
+        surface.blit(label, rect)
