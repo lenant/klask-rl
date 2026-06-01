@@ -1,0 +1,44 @@
+[project]
+name = "klask-rl"
+version = "0.1.0"
+description = "Klask-style aero hockey reinforcement learning environment"
+readme = "README.md"
+authors = [
+    { name = "lenant", email = "lenant255@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "gymnasium==1.0.0",
+    "numpy>=1.26.4",
+    "pettingzoo>=1.26.1",
+    "pygame>=2.6.1",
+    "pymunk>=7.2.0",
+    "rich>=15.0.0",
+    "stable-baselines3==2.4.1",
+    "tensorboard>=2.20.0",
+    "torch==2.2.2",
+    "typer>=0.26.4",
+]
+
+[project.scripts]
+klask-rl = "klask_rl.cli:main"
+klask-train = "klask_rl.cli:train_main"
+klask-eval = "klask_rl.cli:eval_main"
+klask-watch = "klask_rl.cli:watch_main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+    "ruff>=0.15.15",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
