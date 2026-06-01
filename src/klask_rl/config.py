@@ -66,6 +66,9 @@ class RewardConfig:
     own_goal_danger: float = 0.05
     magnet_attached_penalty: float = 0.05
     magnet_proximity_penalty: float = 0.01
+    magnet_attach_penalty: float = 0.0
+    magnet_pull_penalty: float = 0.0
+    own_side_penalty: float = 0.0
     time_penalty: float = 0.0005
     action_penalty: float = 0.0003
 
@@ -107,6 +110,23 @@ REWARD_PROFILES: dict[str, RewardConfig] = {
         own_goal_danger=0.06,
         time_penalty=0.0002,
         action_penalty=0.0001,
+    ),
+    "simple": RewardConfig(
+        terminal_goal=12.0,
+        progress=0.0,
+        puck_position=0.0,
+        puck_speed=0.0,
+        contact=0.0,
+        puck_distance=0.0,
+        defense=0.0,
+        own_goal_danger=0.0,
+        magnet_attached_penalty=0.0,
+        magnet_proximity_penalty=0.0,
+        magnet_attach_penalty=2.0,
+        magnet_pull_penalty=0.05,
+        own_side_penalty=0.01,
+        time_penalty=0.0,
+        action_penalty=0.0,
     ),
 }
 

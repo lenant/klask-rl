@@ -29,7 +29,9 @@ REWARD_COMPONENT_LABELS: tuple[tuple[str, str], ...] = (
     ("danger", "danger"),
     ("time", "time"),
     ("action", "action"),
-    ("magnet", "magnet"),
+    ("magnet_attach", "mag attach"),
+    ("magnet_pull", "mag pull"),
+    ("own_side", "own side"),
     ("terminal", "terminal"),
 )
 
@@ -729,7 +731,7 @@ class KlaskPhysics:
             divider_y = rect.y + 132
             pygame.draw.line(surface, (76, 86, 94), (rect.x + 12, divider_y), (rect.right - 12, divider_y), 1)
             row_y = divider_y + 14
-            row_height = 31
+            row_height = 27
             for component, label in REWARD_COMPONENT_LABELS:
                 value = float(components.get(component, 0.0)) if isinstance(components, dict) else 0.0
                 label_surface = label_font.render(label, True, (184, 194, 200))

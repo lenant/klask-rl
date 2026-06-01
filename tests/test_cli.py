@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 import numpy as np
+from typer.testing import CliRunner
 
-from klask_rl.cli import _human_action_to_canonical, _scaled_world_action, _world_action_from_key_state
+from klask_rl.cli import (
+    _human_action_to_canonical,
+    _scaled_world_action,
+    _world_action_from_key_state,
+    play_app,
+)
 
 
 def test_scaled_world_action_normalizes_diagonal_input() -> None:
@@ -32,3 +38,10 @@ def test_wasd_key_state_maps_to_world_action() -> None:
     )
 
     np.testing.assert_allclose(action, [-0.70710677, 0.70710677])
+
+
+def test_play_help_exposes_reward_profile() -> None:
+    result = CliRunner().invoke(play_app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "--reward-profile" in result.output

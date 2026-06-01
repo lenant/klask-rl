@@ -24,7 +24,9 @@ REWARD_COMPONENTS: tuple[str, ...] = (
     "danger",
     "time",
     "action",
-    "magnet",
+    "magnet_attach",
+    "magnet_pull",
+    "own_side",
     "terminal",
 )
 
@@ -109,11 +111,22 @@ class KlaskParallelEnv(ParallelEnv):
             agent: self._canonical_action_to_world(agent, canonical_actions[agent])
             for agent in active_agents
         }
+        previous_magnet_attached_to = list(self.physics.magnet_attached_to)
 
         result = self.physics.step(world_actions)
         self.steps += 1
         if result.scored_by is not None:
             self.scores[result.scored_by] += 1
+        new_magnet_attachments = {
+            agent: sum(
+                1
+                for before, after in zip(
+                    previous_magnet_attached_to, self.physics.magnet_attached_to, strict=True
+                )
+                if before != agent and after == agent
+            )
+            for agent in active_agents
+        }
 
         own_components = {
             agent: self._shaping_reward_components(
@@ -121,6 +134,7 @@ class KlaskParallelEnv(ParallelEnv):
                 previous_puck_x=previous_puck_x[agent],
                 action=canonical_actions[agent],
                 contact=result.contacts[agent],
+                new_magnet_attachments=new_magnet_attachments[agent],
             )
             for agent in active_agents
         }
@@ -131,6 +145,8 @@ class KlaskParallelEnv(ParallelEnv):
             }
             for agent in active_agents
         }
+        for agent in active_agents:
+            reward_components[agent]["own_side"] = own_components[agent]["own_side"]
         if result.scored_by is not None:
             reward_components[result.scored_by]["terminal"] += self.reward_config.terminal_goal
             reward_components[OPPONENT[result.scored_by]]["terminal"] -= self.reward_config.terminal_goal
@@ -249,12 +265,29 @@ class KlaskParallelEnv(ParallelEnv):
             return clipped
         return np.array([-clipped[0], clipped[1]], dtype=np.float32)
 
+    def _magnet_pull_risk(self, agent: str) -> float:
+        cfg = self.arena_config
+        handle_position = self.physics.handle_bodies[agent].position
+        attach_distance = cfg.handle_radius + cfg.magnet_radius + 0.008
+        active_distance = max(1e-9, cfg.magnet_attraction_range - attach_distance)
+        risk = 0.0
+        for index, magnet_body in enumerate(self.physics.magnet_bodies):
+            if self.physics.magnet_attached_to[index] is not None:
+                continue
+            distance = (magnet_body.position - handle_position).length
+            if distance >= cfg.magnet_attraction_range:
+                continue
+            closeness = (cfg.magnet_attraction_range - max(distance, attach_distance)) / active_distance
+            risk += float(np.clip(closeness, 0.0, 1.0) ** 2)
+        return risk
+
     def _shaping_reward_components(
         self,
         agent: str,
         previous_puck_x: float,
         action: np.ndarray,
         contact: bool,
+        new_magnet_attachments: int = 0,
     ) -> dict[str, float]:
         obs = self._make_observation(agent)
         puck_x = float(obs[8])
@@ -274,10 +307,15 @@ class KlaskParallelEnv(ParallelEnv):
         goal_danger = self.reward_config.own_goal_danger * defensive_need * (1.0 - abs(puck_y))
         action_cost = self.reward_config.action_penalty * float(np.dot(action, action))
         magnet_risk = self.physics.magnet_risk(agent)
-        magnet = -(
+        magnet_attach = -(
             self.reward_config.magnet_attached_penalty * magnet_risk["attached"]
-            + self.reward_config.magnet_proximity_penalty * magnet_risk["proximity"]
+            + self.reward_config.magnet_attach_penalty * float(new_magnet_attachments)
         )
+        magnet_pull = -(
+            self.reward_config.magnet_proximity_penalty * magnet_risk["proximity"]
+            + self.reward_config.magnet_pull_penalty * self._magnet_pull_risk(agent)
+        )
+        own_side = -self.reward_config.own_side_penalty if puck_x < 0.0 else 0.0
         return {
             "progress": progress,
             "position": position,
@@ -288,7 +326,9 @@ class KlaskParallelEnv(ParallelEnv):
             "danger": -goal_danger,
             "time": -self.reward_config.time_penalty,
             "action": -action_cost,
-            "magnet": magnet,
+            "magnet_attach": magnet_attach,
+            "magnet_pull": magnet_pull,
+            "own_side": own_side,
             "terminal": 0.0,
         }
 

@@ -14,7 +14,7 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecEnv
 
-from klask_rl.config import AGENTS, OPPONENT, ArenaConfig
+from klask_rl.config import AGENTS, OPPONENT, REWARD_PROFILES, ArenaConfig
 from klask_rl.envs import KlaskParallelEnv, SelfPlayKlaskEnv
 from klask_rl.opponents import (
     HeuristicOpponent,
@@ -435,6 +435,7 @@ def run_play(
     max_steps: int | None,
     deterministic: bool,
     action_scale: float,
+    reward_profile: str,
 ) -> None:
     if human_side not in AGENTS:
         raise typer.BadParameter("human-side must be one of: left, right")
@@ -445,12 +446,13 @@ def run_play(
     arena_config = ArenaConfig()
     if max_steps is not None:
         arena_config = replace(arena_config, max_steps=max_steps)
-    env = KlaskParallelEnv(arena_config=arena_config)
+    env = KlaskParallelEnv(arena_config=arena_config, reward_profile=reward_profile)
     model_side = OPPONENT[human_side]
     console.print(
         {
             "human_side": human_side,
             "model_side": model_side,
+            "reward_profile": reward_profile,
             "controls": "WASD",
             "pause": "space",
             "quit": "close window or Escape",
@@ -525,7 +527,7 @@ def train_entry(
         int | None, typer.Option(help="Optional max steps per episode.")
     ] = 450,
     reward_profile: Annotated[
-        str, typer.Option(help="Reward profile: balanced, aggressive, defensive, possession.")
+        str, typer.Option(help=f"Reward profile: {', '.join(sorted(REWARD_PROFILES))}.")
     ] = "possession",
     bc_samples: Annotated[int, typer.Option(help="Expert samples for behavior-cloning warm start.")] = 4096,
     bc_epochs: Annotated[int, typer.Option(help="Behavior-cloning epochs before PPO.")] = 4,
@@ -629,8 +631,11 @@ def play_entry(
     ] = 450,
     deterministic: Annotated[bool, typer.Option(help="Use deterministic model actions.")] = True,
     action_scale: Annotated[float, typer.Option(help="Human action strength, 0.0 to 1.0.")] = 1.0,
+    reward_profile: Annotated[
+        str, typer.Option(help=f"Reward profile: {', '.join(sorted(REWARD_PROFILES))}.")
+    ] = "simple",
 ) -> None:
-    run_play(model, human_side, episodes, seed, max_steps, deterministic, action_scale)
+    run_play(model, human_side, episodes, seed, max_steps, deterministic, action_scale, reward_profile)
 
 
 @app.command()
@@ -726,8 +731,9 @@ def play(
     max_steps: int | None = 450,
     deterministic: bool = True,
     action_scale: float = 1.0,
+    reward_profile: str = "simple",
 ) -> None:
-    run_play(model, human_side, episodes, seed, max_steps, deterministic, action_scale)
+    run_play(model, human_side, episodes, seed, max_steps, deterministic, action_scale, reward_profile)
 
 
 def main() -> None:

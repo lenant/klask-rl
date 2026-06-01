@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from pettingzoo.test import parallel_api_test
 from stable_baselines3.common.env_checker import check_env
 
-from klask_rl.config import AGENTS, OBSERVATION_SIZE
+from klask_rl.config import AGENTS, OBSERVATION_SIZE, reward_profile
 from klask_rl.envs import REWARD_COMPONENTS, KlaskParallelEnv, SelfPlayKlaskEnv
 from klask_rl.opponents import HeuristicOpponent
 
@@ -60,6 +61,29 @@ def test_reward_profiles_change_reward_weights() -> None:
     assert aggressive.reward_config.terminal_goal > balanced.reward_config.terminal_goal
 
 
+def test_simple_reward_profile_only_enables_simple_weights() -> None:
+    simple = reward_profile("simple")
+
+    assert simple.terminal_goal == 12.0
+    assert simple.magnet_attach_penalty == 2.0
+    assert simple.magnet_pull_penalty == 0.05
+    assert simple.own_side_penalty == 0.01
+    for disabled_weight in (
+        "progress",
+        "puck_position",
+        "puck_speed",
+        "contact",
+        "puck_distance",
+        "defense",
+        "own_goal_danger",
+        "magnet_attached_penalty",
+        "magnet_proximity_penalty",
+        "time_penalty",
+        "action_penalty",
+    ):
+        assert getattr(simple, disabled_weight) == 0.0
+
+
 def test_reward_overlay_tracks_step_and_episode_rewards() -> None:
     env = KlaskParallelEnv(render_mode="rgb_array")
     env.reset(seed=42)
@@ -90,11 +114,90 @@ def test_magnet_risk_is_zero_sum_reward_component() -> None:
     actions = {agent: np.zeros(2, dtype=np.float32) for agent in AGENTS}
     _, _, _, _, infos = env.step(actions)
 
-    left_magnet = infos["left"]["reward_components"]["left"]["magnet"]
-    right_magnet = infos["right"]["reward_components"]["right"]["magnet"]
+    left_magnet = infos["left"]["reward_components"]["left"]["magnet_pull"]
+    right_magnet = infos["right"]["reward_components"]["right"]["magnet_pull"]
     assert left_magnet < 0.0
     assert right_magnet > 0.0
     assert left_magnet == -right_magnet
+
+
+def test_simple_magnet_attach_penalty_fires_once() -> None:
+    env = KlaskParallelEnv(reward_profile="simple")
+    env.reset(seed=45)
+    cfg = env.physics.config
+    handle = env.physics.handle_bodies["left"]
+    handle.position = (-0.55, 0.0)
+    handle.velocity = (0.0, 0.0)
+    env.physics.puck_body.position = (0.3, 0.3)
+    env.physics.puck_body.velocity = (0.0, 0.0)
+    env.physics.magnet_bodies[0].position = (
+        handle.position.x + cfg.handle_radius + cfg.magnet_radius,
+        handle.position.y,
+    )
+    env.physics.magnet_bodies[0].velocity = (0.0, 0.0)
+
+    actions = {agent: np.zeros(2, dtype=np.float32) for agent in AGENTS}
+    _, _, _, _, infos = env.step(actions)
+
+    assert env.physics.magnet_attached_to[0] == "left"
+    assert infos["left"]["reward_components"]["left"]["magnet_attach"] == pytest.approx(-2.0)
+    assert infos["right"]["reward_components"]["right"]["magnet_attach"] == pytest.approx(2.0)
+
+    _, _, _, _, infos = env.step(actions)
+
+    assert infos["left"]["reward_components"]["left"]["magnet_attach"] == 0.0
+    assert infos["right"]["reward_components"]["right"]["magnet_attach"] == 0.0
+
+
+def test_simple_magnet_pull_penalty_scales_with_distance() -> None:
+    env = KlaskParallelEnv(reward_profile="simple")
+    env.reset(seed=46)
+    cfg = env.physics.config
+    handle = env.physics.handle_bodies["left"]
+    handle.position = (-0.4, 0.0)
+    handle.velocity = (0.0, 0.0)
+    for index, magnet_body in enumerate(env.physics.magnet_bodies):
+        env.physics.magnet_attached_to[index] = None
+        magnet_body.position = (0.4, 0.4)
+        magnet_body.velocity = (0.0, 0.0)
+
+    env.physics.magnet_bodies[0].position = (
+        handle.position.x + cfg.handle_radius + cfg.magnet_radius + 0.02,
+        handle.position.y,
+    )
+    near_risk = env._magnet_pull_risk("left")
+
+    env.physics.magnet_bodies[0].position = (
+        handle.position.x + cfg.magnet_attraction_range - 0.02,
+        handle.position.y,
+    )
+    far_risk = env._magnet_pull_risk("left")
+
+    env.physics.magnet_bodies[0].position = (
+        handle.position.x + cfg.magnet_attraction_range + 0.02,
+        handle.position.y,
+    )
+    outside_risk = env._magnet_pull_risk("left")
+
+    assert near_risk > far_risk > 0.0
+    assert outside_risk == 0.0
+
+
+def test_simple_own_side_penalizes_only_side_with_puck() -> None:
+    env = KlaskParallelEnv(reward_profile="simple")
+    env.reset(seed=47)
+    env.physics.puck_body.position = (-0.3, 0.0)
+    env.physics.puck_body.velocity = (0.0, 0.0)
+    env.physics.handle_bodies["left"].position = (-0.7, 0.3)
+    env.physics.handle_bodies["right"].position = (0.7, 0.3)
+
+    actions = {agent: np.zeros(2, dtype=np.float32) for agent in AGENTS}
+    _, _, _, _, infos = env.step(actions)
+
+    left_own_side = infos["left"]["reward_components"]["left"]["own_side"]
+    right_own_side = infos["right"]["reward_components"]["right"]["own_side"]
+    assert left_own_side == pytest.approx(-0.01)
+    assert right_own_side == 0.0
 
 
 def test_magnet_scoring_terminates_episode_with_reason() -> None:
