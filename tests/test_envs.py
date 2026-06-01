@@ -59,3 +59,46 @@ def test_reward_overlay_tracks_step_and_episode_rewards() -> None:
     frame = env.render()
     assert frame is not None
     assert frame.shape == (env.physics._surface_size[1], env.physics._surface_size[0], 3)
+
+
+def test_magnet_risk_is_zero_sum_reward_component() -> None:
+    env = KlaskParallelEnv()
+    env.reset(seed=43)
+    handle_position = env.physics.handle_bodies["left"].position
+    env.physics.magnet_bodies[0].position = (handle_position.x + 0.18, handle_position.y)
+    env.physics.magnet_bodies[0].velocity = (0.0, 0.0)
+
+    actions = {agent: np.zeros(2, dtype=np.float32) for agent in AGENTS}
+    _, _, _, _, infos = env.step(actions)
+
+    left_magnet = infos["left"]["reward_components"]["left"]["magnet"]
+    right_magnet = infos["right"]["reward_components"]["right"]["magnet"]
+    assert left_magnet < 0.0
+    assert right_magnet > 0.0
+    assert left_magnet == -right_magnet
+
+
+def test_magnet_scoring_terminates_episode_with_reason() -> None:
+    env = KlaskParallelEnv()
+    env.reset(seed=44)
+    cfg = env.physics.config
+    handle_position = env.physics.handle_bodies["left"].position
+    env.physics.magnet_bodies[0].position = (
+        handle_position.x + cfg.handle_radius + cfg.magnet_radius,
+        handle_position.y,
+    )
+    env.physics.magnet_bodies[1].position = (
+        handle_position.x,
+        handle_position.y + cfg.handle_radius + cfg.magnet_radius,
+    )
+    env.physics.magnet_bodies[0].velocity = (0.0, 0.0)
+    env.physics.magnet_bodies[1].velocity = (0.0, 0.0)
+
+    actions = {agent: np.zeros(2, dtype=np.float32) for agent in AGENTS}
+    _, _, terminations, _, infos = env.step(actions)
+
+    assert terminations == {"left": True, "right": True}
+    assert infos["left"]["score"] == {"left": 0, "right": 1}
+    assert infos["left"]["scored_by"] == "right"
+    assert infos["left"]["score_reason"] == "magnets"
+    assert infos["left"]["magnet_counts"]["left"] == 2

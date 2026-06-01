@@ -13,6 +13,8 @@ from klask_rl.config import AGENTS, ArenaConfig
 class PhysicsStepResult:
     scored_by: str | None
     contacts: dict[str, bool]
+    score_reason: str | None
+    magnet_counts: dict[str, int]
 
 
 RewardOverlay = dict[str, dict[str, Any]]
@@ -27,6 +29,7 @@ REWARD_COMPONENT_LABELS: tuple[tuple[str, str], ...] = (
     ("danger", "danger"),
     ("time", "time"),
     ("action", "action"),
+    ("magnet", "magnet"),
     ("terminal", "terminal"),
 )
 
@@ -45,6 +48,11 @@ class KlaskPhysics:
         self.puck_shape: pymunk.Circle
         self.handle_bodies: dict[str, pymunk.Body] = {}
         self.handle_shapes: dict[str, pymunk.Circle] = {}
+        self.magnet_bodies: list[pymunk.Body] = []
+        self.magnet_shapes: list[pymunk.Circle] = []
+        self.magnet_attached_to: list[str | None] = []
+        self.magnet_attracted_to: list[str | None] = []
+        self._magnet_contact_frames: list[dict[str, int]] = []
         self.paused = False
         self._screen: Any | None = None
         self._clock: Any | None = None
@@ -66,6 +74,11 @@ class KlaskPhysics:
         self.space.damping = cfg.damping
         self.handle_bodies = {}
         self.handle_shapes = {}
+        self.magnet_bodies = []
+        self.magnet_shapes = []
+        self.magnet_attached_to = []
+        self.magnet_attracted_to = []
+        self._magnet_contact_frames = []
         self.paused = False
 
         self._add_walls()
@@ -87,6 +100,8 @@ class KlaskPhysics:
 
         self._add_handle("left", (-0.55, rng.uniform(-0.08, 0.08)))
         self._add_handle("right", (0.55, rng.uniform(-0.08, 0.08)))
+        for position in self._magnet_start_positions():
+            self._add_magnet(position)
 
     def _add_walls(self) -> None:
         cfg = self.config
@@ -119,6 +134,25 @@ class KlaskPhysics:
         self.handle_bodies[agent] = body
         self.handle_shapes[agent] = shape
 
+    def _magnet_start_positions(self) -> list[tuple[float, float]]:
+        positions = [(-0.18, -0.24), (0.18, -0.24), (0.0, 0.24)]
+        return positions[: self.config.magnet_count]
+
+    def _add_magnet(self, position: tuple[float, float]) -> None:
+        cfg = self.config
+        moment = pymunk.moment_for_circle(cfg.magnet_mass, 0.0, cfg.magnet_radius)
+        body = pymunk.Body(cfg.magnet_mass, moment)
+        body.position = position
+        shape = pymunk.Circle(body, cfg.magnet_radius)
+        shape.elasticity = cfg.magnet_elasticity
+        shape.friction = cfg.magnet_friction
+        self.space.add(body, shape)
+        self.magnet_bodies.append(body)
+        self.magnet_shapes.append(shape)
+        self.magnet_attached_to.append(None)
+        self.magnet_attracted_to.append(None)
+        self._magnet_contact_frames.append({agent: 0 for agent in AGENTS})
+
     def step(self, world_actions: dict[str, np.ndarray]) -> PhysicsStepResult:
         cfg = self.config
         for agent in AGENTS:
@@ -127,20 +161,176 @@ class KlaskPhysics:
             self.handle_bodies[agent].velocity = tuple(action * cfg.max_handle_speed)
 
         scored_by: str | None = None
+        score_reason: str | None = None
         contacts = {agent: False for agent in AGENTS}
         for _ in range(cfg.frame_skip):
+            self._apply_magnet_forces()
             self.space.step(cfg.physics_dt)
             self._clamp_handles()
             self._contain_puck()
+            self._contain_magnets()
             scored_by = self._detect_goal()
             if scored_by is not None:
+                score_reason = "goal"
                 break
             self._separate_handles_from_puck()
+            self._separate_handles_from_magnets()
+            self._contain_magnets()
+            self._update_magnet_attachment_state()
+            scored_by = self._detect_magnet_score()
+            if scored_by is not None:
+                score_reason = "magnets"
+                break
             self._limit_puck_speed()
             for agent in AGENTS:
                 contacts[agent] = contacts[agent] or self._is_touching(agent)
 
-        return PhysicsStepResult(scored_by=scored_by, contacts=contacts)
+        return PhysicsStepResult(
+            scored_by=scored_by,
+            contacts=contacts,
+            score_reason=score_reason,
+            magnet_counts=self.magnet_attachment_counts(),
+        )
+
+    def _magnet_attraction_force(self, distance: float) -> float:
+        cfg = self.config
+        if distance <= 1e-9 or distance >= cfg.magnet_attraction_range:
+            return 0.0
+        closeness = 1.0 - distance / cfg.magnet_attraction_range
+        return min(cfg.magnet_max_force, cfg.magnet_attraction_strength * closeness * closeness)
+
+    def _apply_magnet_forces(self) -> None:
+        self.magnet_attracted_to = [None for _ in self.magnet_bodies]
+        for index, magnet_body in enumerate(self.magnet_bodies):
+            strongest_agent: str | None = None
+            strongest_force = 0.0
+            for agent, handle_body in self.handle_bodies.items():
+                delta = handle_body.position - magnet_body.position
+                distance = delta.length
+                magnitude = self._magnet_attraction_force(distance)
+                if magnitude <= 0.0:
+                    continue
+                normal = delta / distance
+                force = normal * magnitude
+                magnet_body.apply_force_at_world_point(force, magnet_body.position)
+                if magnitude > strongest_force:
+                    strongest_force = magnitude
+                    strongest_agent = agent
+            self.magnet_attracted_to[index] = strongest_agent
+
+    def _contain_magnets(self) -> None:
+        cfg = self.config
+        x_min = -cfg.half_width + cfg.magnet_radius
+        x_max = cfg.half_width - cfg.magnet_radius
+        y_min = -cfg.half_height + cfg.magnet_radius
+        y_max = cfg.half_height - cfg.magnet_radius
+        for body in self.magnet_bodies:
+            x = body.position.x
+            y = body.position.y
+            vx = body.velocity.x
+            vy = body.velocity.y
+            changed = False
+
+            if x > x_max:
+                x = x_max
+                vx = -abs(vx) * cfg.magnet_elasticity
+                changed = True
+            elif x < x_min:
+                x = x_min
+                vx = abs(vx) * cfg.magnet_elasticity
+                changed = True
+
+            if y > y_max:
+                y = y_max
+                vy = -abs(vy) * cfg.magnet_elasticity
+                changed = True
+            elif y < y_min:
+                y = y_min
+                vy = abs(vy) * cfg.magnet_elasticity
+                changed = True
+
+            if changed:
+                body.position = (x, y)
+                body.velocity = (vx, vy)
+
+    def _separate_handles_from_magnets(self) -> None:
+        cfg = self.config
+        min_distance = cfg.magnet_radius + cfg.handle_radius + 1e-6
+        for magnet_body in self.magnet_bodies:
+            for agent, handle_body in self.handle_bodies.items():
+                delta = magnet_body.position - handle_body.position
+                distance = delta.length
+                if distance >= min_distance:
+                    continue
+
+                if distance > 1e-9:
+                    normal = delta / distance
+                else:
+                    fallback_x = -1.0 if agent == "left" else 1.0
+                    normal = pymunk.Vec2d(fallback_x, 0.0)
+
+                magnet_body.position = handle_body.position + normal * min_distance
+                inward_speed = magnet_body.velocity.dot(normal)
+                if inward_speed < 0.0:
+                    magnet_body.velocity = magnet_body.velocity - normal * inward_speed
+
+    def _update_magnet_attachment_state(self) -> None:
+        cfg = self.config
+        attach_distance = cfg.handle_radius + cfg.magnet_radius + 0.008
+        for index, magnet_body in enumerate(self.magnet_bodies):
+            attached_agent = self.magnet_attached_to[index]
+            if attached_agent is not None:
+                distance = (magnet_body.position - self.handle_bodies[attached_agent].position).length
+                if distance <= cfg.magnet_release_distance:
+                    self._magnet_contact_frames[index][attached_agent] = cfg.magnet_attach_frames
+                    continue
+                self.magnet_attached_to[index] = None
+                self._magnet_contact_frames[index] = {agent: 0 for agent in AGENTS}
+
+            candidate: str | None = None
+            candidate_distance = float("inf")
+            for agent, handle_body in self.handle_bodies.items():
+                distance = (magnet_body.position - handle_body.position).length
+                if distance <= attach_distance:
+                    self._magnet_contact_frames[index][agent] += 1
+                    if (
+                        self._magnet_contact_frames[index][agent] >= cfg.magnet_attach_frames
+                        and distance < candidate_distance
+                    ):
+                        candidate = agent
+                        candidate_distance = distance
+                else:
+                    self._magnet_contact_frames[index][agent] = 0
+            if candidate is not None:
+                self.magnet_attached_to[index] = candidate
+
+    def magnet_attachment_counts(self) -> dict[str, int]:
+        return {
+            agent: sum(1 for attached_agent in self.magnet_attached_to if attached_agent == agent)
+            for agent in AGENTS
+        }
+
+    def magnet_risk(self, agent: str) -> dict[str, float]:
+        cfg = self.config
+        attached = float(sum(1 for attached_agent in self.magnet_attached_to if attached_agent == agent))
+        proximity = 0.0
+        handle_position = self.handle_bodies[agent].position
+        for index, magnet_body in enumerate(self.magnet_bodies):
+            if self.magnet_attached_to[index] is not None:
+                continue
+            distance = (magnet_body.position - handle_position).length
+            if distance < cfg.magnet_attraction_range:
+                proximity += 1.0 - distance / cfg.magnet_attraction_range
+        return {"attached": attached, "proximity": proximity}
+
+    def _detect_magnet_score(self) -> str | None:
+        counts = self.magnet_attachment_counts()
+        threshold = self.config.magnet_score_threshold
+        if counts["left"] >= threshold and counts["left"] >= counts["right"]:
+            return "right"
+        if counts["right"] >= threshold:
+            return "left"
+        return None
 
     def _handle_bounds(self, agent: str) -> tuple[float, float, float, float]:
         cfg = self.config
@@ -361,6 +551,17 @@ class KlaskPhysics:
             (arena_left + arena_width // 2, arena_height),
             1,
         )
+        for index, magnet_body in enumerate(self.magnet_bodies):
+            owner = self.magnet_attached_to[index] or self.magnet_attracted_to[index]
+            outline = (218, 224, 222)
+            if owner == "left":
+                outline = (255, 128, 122)
+            elif owner == "right":
+                outline = (120, 162, 255)
+            center = to_screen(magnet_body.position)
+            radius = to_px(cfg.magnet_radius)
+            pygame.draw.circle(surface, (226, 230, 224), center, radius)
+            pygame.draw.circle(surface, outline, center, radius + 3, 2)
         pygame.draw.circle(surface, (245, 245, 240), to_screen(self.puck_body.position), to_px(cfg.puck_radius))
         pygame.draw.circle(
             surface,

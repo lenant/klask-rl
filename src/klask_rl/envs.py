@@ -24,6 +24,7 @@ REWARD_COMPONENTS: tuple[str, ...] = (
     "danger",
     "time",
     "action",
+    "magnet",
     "terminal",
 )
 
@@ -156,7 +157,9 @@ class KlaskParallelEnv(ParallelEnv):
             agent: {
                 "score": self.scores.copy(),
                 "scored_by": result.scored_by,
+                "score_reason": result.score_reason,
                 "contacts": result.contacts.copy(),
+                "magnet_counts": result.magnet_counts.copy(),
                 "steps": self.steps,
                 "rewards": self.last_rewards.copy(),
                 "episode_rewards": self.episode_rewards.copy(),
@@ -241,6 +244,11 @@ class KlaskParallelEnv(ParallelEnv):
         defense = self.reward_config.defense * defensive_need * y_alignment
         goal_danger = self.reward_config.own_goal_danger * defensive_need * (1.0 - abs(puck_y))
         action_cost = self.reward_config.action_penalty * float(np.dot(action, action))
+        magnet_risk = self.physics.magnet_risk(agent)
+        magnet = -(
+            self.reward_config.magnet_attached_penalty * magnet_risk["attached"]
+            + self.reward_config.magnet_proximity_penalty * magnet_risk["proximity"]
+        )
         return {
             "progress": progress,
             "position": position,
@@ -251,6 +259,7 @@ class KlaskParallelEnv(ParallelEnv):
             "danger": -goal_danger,
             "time": -self.reward_config.time_penalty,
             "action": -action_cost,
+            "magnet": magnet,
             "terminal": 0.0,
         }
 

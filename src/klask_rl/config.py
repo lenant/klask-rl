@@ -11,6 +11,17 @@ class ArenaConfig:
     wall_radius: float = 0.018
     puck_radius: float = 0.035
     handle_radius: float = 0.07
+    magnet_count: int = 3
+    magnet_radius: float = 0.026
+    magnet_mass: float = 0.03
+    magnet_attraction_range: float = 0.28
+    magnet_attraction_strength: float = 0.11
+    magnet_max_force: float = 0.12
+    magnet_friction: float = 0.75
+    magnet_elasticity: float = 0.35
+    magnet_attach_frames: int = 4
+    magnet_release_distance: float = 0.16
+    magnet_score_threshold: int = 2
     puck_mass: float = 0.045
     max_handle_speed: float = 1.8
     max_puck_speed: float = 3.2
@@ -49,6 +60,8 @@ class RewardConfig:
     puck_distance: float = 0.025
     defense: float = 0.04
     own_goal_danger: float = 0.05
+    magnet_attached_penalty: float = 0.05
+    magnet_proximity_penalty: float = 0.01
     time_penalty: float = 0.0005
     action_penalty: float = 0.0003
 

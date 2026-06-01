@@ -99,3 +99,73 @@ def test_space_toggles_pause_in_human_render(monkeypatch) -> None:
     assert not physics.paused
 
     physics.close()
+
+
+def test_magnets_are_created_inside_arena() -> None:
+    physics = KlaskPhysics()
+    cfg = physics.config
+
+    assert len(physics.magnet_bodies) == cfg.magnet_count
+    for body in physics.magnet_bodies:
+        assert -cfg.half_width + cfg.magnet_radius <= body.position.x <= cfg.half_width - cfg.magnet_radius
+        assert -cfg.half_height + cfg.magnet_radius <= body.position.y <= cfg.half_height - cfg.magnet_radius
+
+
+def test_magnet_attraction_fades_with_distance() -> None:
+    physics = KlaskPhysics()
+    cfg = physics.config
+
+    near_force = physics._magnet_attraction_force(cfg.magnet_attraction_range * 0.25)
+    far_force = physics._magnet_attraction_force(cfg.magnet_attraction_range * 0.75)
+
+    assert near_force > far_force > 0.0
+    assert physics._magnet_attraction_force(cfg.magnet_attraction_range + 0.01) == 0.0
+
+
+def test_handler_can_run_away_from_nearby_magnet() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=7)
+    physics.handle_bodies["left"].position = (-0.24, 0.0)
+    physics.handle_bodies["left"].velocity = (0.0, 0.0)
+    physics.magnet_bodies[0].position = (-0.48, 0.0)
+    physics.magnet_bodies[0].velocity = (0.0, 0.0)
+
+    initial_distance = (physics.magnet_bodies[0].position - physics.handle_bodies["left"].position).length
+    for _ in range(8):
+        physics.step({"left": np.array([1.0, 0.0]), "right": np.zeros(2)})
+    final_distance = (physics.magnet_bodies[0].position - physics.handle_bodies["left"].position).length
+
+    assert final_distance > initial_distance
+
+
+def test_sustained_contact_marks_magnet_attached() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=8)
+    cfg = physics.config
+    handle_position = (-0.4, 0.0)
+    physics.handle_bodies["left"].position = handle_position
+    physics.magnet_bodies[0].position = (handle_position[0] + cfg.handle_radius + cfg.magnet_radius, 0.0)
+    physics.magnet_bodies[0].velocity = (0.0, 0.0)
+
+    physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+
+    assert physics.magnet_attached_to[0] == "left"
+    assert physics.magnet_attachment_counts()["left"] == 1
+
+
+def test_two_attached_magnets_score_for_opponent() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=9)
+    cfg = physics.config
+    handle_position = (-0.4, 0.0)
+    physics.handle_bodies["left"].position = handle_position
+    physics.magnet_bodies[0].position = (handle_position[0] + cfg.handle_radius + cfg.magnet_radius, 0.0)
+    physics.magnet_bodies[1].position = (handle_position[0], cfg.handle_radius + cfg.magnet_radius)
+    physics.magnet_bodies[0].velocity = (0.0, 0.0)
+    physics.magnet_bodies[1].velocity = (0.0, 0.0)
+
+    result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+
+    assert result.scored_by == "right"
+    assert result.score_reason == "magnets"
+    assert result.magnet_counts["left"] == 2
