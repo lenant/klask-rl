@@ -106,16 +106,18 @@ class KlaskPhysics:
         for _ in range(cfg.frame_skip):
             self.space.step(cfg.physics_dt)
             self._clamp_handles()
-            self._limit_puck_speed()
-            for agent in AGENTS:
-                contacts[agent] = contacts[agent] or self._is_touching(agent)
+            self._contain_puck()
             scored_by = self._detect_goal()
             if scored_by is not None:
                 break
+            self._separate_handles_from_puck()
+            self._limit_puck_speed()
+            for agent in AGENTS:
+                contacts[agent] = contacts[agent] or self._is_touching(agent)
 
         return PhysicsStepResult(scored_by=scored_by, contacts=contacts)
 
-    def _clamp_handles(self) -> None:
+    def _handle_bounds(self, agent: str) -> tuple[float, float, float, float]:
         cfg = self.config
         y_min = -cfg.half_height + cfg.handle_radius
         y_max = cfg.half_height - cfg.handle_radius
@@ -123,13 +125,124 @@ class KlaskPhysics:
             "left": (-cfg.half_width + cfg.handle_radius, -cfg.handle_radius),
             "right": (cfg.handle_radius, cfg.half_width - cfg.handle_radius),
         }
+        x_min, x_max = x_limits[agent]
+        return x_min, x_max, y_min, y_max
+
+    def _clamped_handle_position(self, agent: str, position: pymunk.Vec2d) -> pymunk.Vec2d:
+        x_min, x_max, y_min, y_max = self._handle_bounds(agent)
+        return pymunk.Vec2d(
+            float(np.clip(position.x, x_min, x_max)),
+            float(np.clip(position.y, y_min, y_max)),
+        )
+
+    def _non_overlapping_handle_position(
+        self,
+        agent: str,
+        current_position: pymunk.Vec2d,
+        preferred_position: pymunk.Vec2d,
+        puck_position: pymunk.Vec2d,
+        min_distance: float,
+    ) -> pymunk.Vec2d:
+        x_min, x_max, y_min, y_max = self._handle_bounds(agent)
+        min_distance_sq = min_distance * min_distance
+        candidates = [
+            self._clamped_handle_position(agent, preferred_position),
+            pymunk.Vec2d(x_min, y_min),
+            pymunk.Vec2d(x_min, y_max),
+            pymunk.Vec2d(x_max, y_min),
+            pymunk.Vec2d(x_max, y_max),
+        ]
+
+        for x in (x_min, x_max):
+            dx = x - puck_position.x
+            remaining = min_distance_sq - dx * dx
+            if remaining >= 0.0:
+                dy = float(np.sqrt(remaining))
+                for y in (puck_position.y - dy, puck_position.y + dy):
+                    if y_min <= y <= y_max:
+                        candidates.append(pymunk.Vec2d(x, y))
+
+        for y in (y_min, y_max):
+            dy = y - puck_position.y
+            remaining = min_distance_sq - dy * dy
+            if remaining >= 0.0:
+                dx = float(np.sqrt(remaining))
+                for x in (puck_position.x - dx, puck_position.x + dx):
+                    if x_min <= x <= x_max:
+                        candidates.append(pymunk.Vec2d(x, y))
+
+        valid_candidates = [
+            candidate
+            for candidate in candidates
+            if (candidate - puck_position).length >= min_distance - 1e-9
+        ]
+        if valid_candidates:
+            return min(valid_candidates, key=lambda candidate: (candidate - current_position).length)
+
+        return max(candidates, key=lambda candidate: (candidate - puck_position).length)
+
+    def _clamp_handles(self) -> None:
         for agent, body in self.handle_bodies.items():
-            x_min, x_max = x_limits[agent]
-            x = float(np.clip(body.position.x, x_min, x_max))
-            y = float(np.clip(body.position.y, y_min, y_max))
-            if x != body.position.x or y != body.position.y:
-                body.position = (x, y)
+            clamped = self._clamped_handle_position(agent, body.position)
+            if clamped.x != body.position.x or clamped.y != body.position.y:
+                body.position = clamped
                 body.velocity = (0.0, 0.0)
+
+    def _contain_puck(self) -> None:
+        cfg = self.config
+        puck = self.puck_body
+        x = puck.position.x
+        y = puck.position.y
+        vx = puck.velocity.x
+        vy = puck.velocity.y
+        y_min = -cfg.half_height + cfg.puck_radius
+        y_max = cfg.half_height - cfg.puck_radius
+        changed = False
+
+        if y > y_max:
+            y = y_max
+            vy = -abs(vy) * cfg.wall_elasticity
+            changed = True
+        elif y < y_min:
+            y = y_min
+            vy = abs(vy) * cfg.wall_elasticity
+            changed = True
+
+        if changed:
+            puck.position = (x, y)
+            puck.velocity = (vx, vy)
+
+    def _separate_handles_from_puck(self) -> None:
+        cfg = self.config
+        min_distance = cfg.puck_radius + cfg.handle_radius + 1e-6
+        puck_position = self.puck_body.position
+        for agent, body in self.handle_bodies.items():
+            delta = body.position - puck_position
+            distance = delta.length
+            if distance >= min_distance:
+                continue
+
+            if distance > 1e-9:
+                normal = delta / distance
+            else:
+                fallback_x = -1.0 if agent == "left" else 1.0
+                normal = pymunk.Vec2d(fallback_x, 0.0)
+
+            body.position = self._non_overlapping_handle_position(
+                agent=agent,
+                current_position=body.position,
+                preferred_position=puck_position + normal * min_distance,
+                puck_position=puck_position,
+                min_distance=min_distance,
+            )
+
+            corrected_delta = body.position - puck_position
+            corrected_distance = corrected_delta.length
+            if corrected_distance > 1e-9:
+                corrected_normal = corrected_delta / corrected_distance
+                inward_speed = body.velocity.dot(corrected_normal)
+                if inward_speed < 0.0:
+                    body.velocity = body.velocity - corrected_normal * inward_speed
 
     def _limit_puck_speed(self) -> None:
         velocity = self.puck_body.velocity
