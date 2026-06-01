@@ -117,4 +117,5 @@ def reward_profile(name: str) -> RewardConfig:
 
 AGENTS: tuple[str, str] = ("left", "right")
 OPPONENT: dict[str, str] = {"left": "right", "right": "left"}
-OBSERVATION_SIZE = 16
+MAGNET_FEATURES = 5
+OBSERVATION_SIZE = 16 + ArenaConfig.magnet_count * MAGNET_FEATURES + 2

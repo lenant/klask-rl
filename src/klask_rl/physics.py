@@ -541,6 +541,8 @@ class KlaskPhysics:
             "left_vel": np.array(self.handle_bodies["left"].velocity, dtype=np.float32),
             "right_pos": np.array(self.handle_bodies["right"].position, dtype=np.float32),
             "right_vel": np.array(self.handle_bodies["right"].velocity, dtype=np.float32),
+            "magnet_pos": np.array([body.position for body in self.magnet_bodies], dtype=np.float32),
+            "magnet_vel": np.array([body.velocity for body in self.magnet_bodies], dtype=np.float32),
         }
 
     def render(self, mode: str = "human", reward_overlay: RewardOverlay | None = None) -> np.ndarray | None:

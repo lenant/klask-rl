@@ -4,7 +4,7 @@ import numpy as np
 from pettingzoo.test import parallel_api_test
 from stable_baselines3.common.env_checker import check_env
 
-from klask_rl.config import AGENTS
+from klask_rl.config import AGENTS, OBSERVATION_SIZE
 from klask_rl.envs import REWARD_COMPONENTS, KlaskParallelEnv, SelfPlayKlaskEnv
 from klask_rl.opponents import HeuristicOpponent
 
@@ -32,6 +32,25 @@ def test_reset_is_deterministic_for_same_seed() -> None:
     obs_b, _ = env_b.reset(seed=123)
     np.testing.assert_allclose(obs_a["left"], obs_b["left"])
     np.testing.assert_allclose(obs_a["right"], obs_b["right"])
+    assert obs_a["left"].shape == (OBSERVATION_SIZE,)
+
+
+def test_magnet_observation_is_side_canonical() -> None:
+    env = KlaskParallelEnv()
+    env.reset(seed=124)
+    env.physics.magnet_bodies[0].position = (0.2, -0.1)
+    env.physics.magnet_bodies[0].velocity = (0.4, -0.2)
+    env.physics.magnet_attached_to[0] = "left"
+
+    left_obs = env._make_observation("left")
+    right_obs = env._make_observation("right")
+
+    assert left_obs[16] == -right_obs[16]
+    assert left_obs[17] == right_obs[17]
+    assert left_obs[18] == -right_obs[18]
+    assert left_obs[19] == right_obs[19]
+    assert left_obs[20] == 1.0
+    assert right_obs[20] == -1.0
 
 
 def test_reward_profiles_change_reward_weights() -> None:

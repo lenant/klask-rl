@@ -190,25 +190,54 @@ class KlaskParallelEnv(ParallelEnv):
         opp_vel = snap[f"{opponent}_vel"]
         puck_pos = snap["puck_pos"]
         puck_vel = snap["puck_vel"]
+        magnet_pos = snap["magnet_pos"]
+        magnet_vel = snap["magnet_vel"]
+
+        base_observation = [
+            sign * own_pos[0] / cfg.half_width,
+            own_pos[1] / cfg.half_height,
+            sign * own_vel[0] / cfg.max_handle_speed,
+            own_vel[1] / cfg.max_handle_speed,
+            sign * opp_pos[0] / cfg.half_width,
+            opp_pos[1] / cfg.half_height,
+            sign * opp_vel[0] / cfg.max_handle_speed,
+            opp_vel[1] / cfg.max_handle_speed,
+            sign * puck_pos[0] / cfg.half_width,
+            puck_pos[1] / cfg.half_height,
+            sign * puck_vel[0] / cfg.max_puck_speed,
+            puck_vel[1] / cfg.max_puck_speed,
+            sign * (puck_pos[0] - own_pos[0]) / cfg.width,
+            (puck_pos[1] - own_pos[1]) / cfg.height,
+            (self.scores[agent] - self.scores[opponent]) / 3.0,
+            1.0 - min(1.0, self.steps / cfg.max_steps),
+        ]
+        magnet_features: list[float] = []
+        for index in range(cfg.magnet_count):
+            pos = magnet_pos[index]
+            vel = magnet_vel[index]
+            attached_to = self.physics.magnet_attached_to[index]
+            if attached_to == agent:
+                attached_state = 1.0
+            elif attached_to == opponent:
+                attached_state = -1.0
+            else:
+                attached_state = 0.0
+            magnet_features.extend(
+                [
+                    sign * pos[0] / cfg.half_width,
+                    pos[1] / cfg.half_height,
+                    sign * vel[0] / cfg.max_puck_speed,
+                    vel[1] / cfg.max_puck_speed,
+                    attached_state,
+                ]
+            )
 
         observation = np.array(
             [
-                sign * own_pos[0] / cfg.half_width,
-                own_pos[1] / cfg.half_height,
-                sign * own_vel[0] / cfg.max_handle_speed,
-                own_vel[1] / cfg.max_handle_speed,
-                sign * opp_pos[0] / cfg.half_width,
-                opp_pos[1] / cfg.half_height,
-                sign * opp_vel[0] / cfg.max_handle_speed,
-                opp_vel[1] / cfg.max_handle_speed,
-                sign * puck_pos[0] / cfg.half_width,
-                puck_pos[1] / cfg.half_height,
-                sign * puck_vel[0] / cfg.max_puck_speed,
-                puck_vel[1] / cfg.max_puck_speed,
-                sign * (puck_pos[0] - own_pos[0]) / cfg.width,
-                (puck_pos[1] - own_pos[1]) / cfg.height,
-                (self.scores[agent] - self.scores[opponent]) / 3.0,
-                1.0 - min(1.0, self.steps / cfg.max_steps),
+                *base_observation,
+                *magnet_features,
+                self.physics.magnet_attachment_counts()[agent] / cfg.magnet_score_threshold,
+                self.physics.magnet_attachment_counts()[opponent] / cfg.magnet_score_threshold,
             ],
             dtype=np.float32,
         )
