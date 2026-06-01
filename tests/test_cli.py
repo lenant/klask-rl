@@ -10,6 +10,7 @@ from klask_rl.cli import (
     parse_policy_net_arch,
     play_app,
     train_app,
+    watch_app,
 )
 
 
@@ -44,6 +45,13 @@ def test_wasd_key_state_maps_to_world_action() -> None:
 
 def test_play_help_exposes_reward_profile() -> None:
     result = CliRunner().invoke(play_app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "--reward-profile" in result.output
+
+
+def test_watch_help_exposes_reward_profile() -> None:
+    result = CliRunner().invoke(watch_app, ["--help"])
 
     assert result.exit_code == 0
     assert "--reward-profile" in result.output

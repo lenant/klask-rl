@@ -123,6 +123,7 @@ def benchmark_snapshot(
     seed: int,
     max_steps: int,
     deterministic: bool,
+    reward_profile: str,
 ) -> dict[str, Any]:
     row: dict[str, Any] = {
         "step": step,
@@ -145,6 +146,7 @@ def benchmark_snapshot(
             deterministic=deterministic,
             render=False,
             max_steps=max_steps,
+            reward_profile=reward_profile,
         )
         summary_dict = summary.as_dict()
         qualities.append(float(summary.quality_score))
@@ -209,6 +211,7 @@ def run_monitor(args: argparse.Namespace) -> None:
                 seed=args.seed,
                 max_steps=args.max_steps,
                 deterministic=not args.stochastic,
+                reward_profile=args.reward_profile,
             )
             aggregate_quality = float(row["aggregate_quality"])
             if aggregate_quality > best_quality:
@@ -255,6 +258,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=450)
     parser.add_argument("--min-step", type=int, default=0)
     parser.add_argument("--max-step", type=int)
+    parser.add_argument("--reward-profile", default="simple")
     parser.add_argument("--poll-interval", type=float, default=20.0)
     parser.add_argument("--stochastic", action="store_true")
     parser.add_argument("--once", action="store_true")

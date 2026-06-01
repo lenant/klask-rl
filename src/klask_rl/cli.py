@@ -280,6 +280,7 @@ def run_eval(
     deterministic: bool,
     render: bool,
     max_steps: int | None,
+    reward_profile: str,
 ) -> EvaluationSummary:
     model = PPO.load(model_path)
     if self_play and opponent_model is None:
@@ -302,6 +303,7 @@ def run_eval(
             opponent=opponent_policy,
             render_mode="human" if render else None,
             max_steps=max_steps,
+            reward_profile=reward_profile,
         )
         obs, info = env.reset(seed=seed + episode)
         done = False
@@ -358,10 +360,33 @@ def run_benchmark(
     seed: int,
     deterministic: bool,
     max_steps: int | None,
+    reward_profile: str,
 ) -> dict[str, float | int | str]:
     summaries = [
-        run_eval(model_path, episodes, None, "passive", False, seed, deterministic, False, max_steps),
-        run_eval(model_path, episodes, None, "random", False, seed + 100, deterministic, False, max_steps),
+        run_eval(
+            model_path,
+            episodes,
+            None,
+            "passive",
+            False,
+            seed,
+            deterministic,
+            False,
+            max_steps,
+            reward_profile,
+        ),
+        run_eval(
+            model_path,
+            episodes,
+            None,
+            "random",
+            False,
+            seed + 100,
+            deterministic,
+            False,
+            max_steps,
+            reward_profile,
+        ),
         run_eval(
             model_path,
             episodes,
@@ -372,8 +397,20 @@ def run_benchmark(
             deterministic,
             False,
             max_steps,
+            reward_profile,
         ),
-        run_eval(model_path, episodes, None, "heuristic", True, seed + 300, deterministic, False, max_steps),
+        run_eval(
+            model_path,
+            episodes,
+            None,
+            "heuristic",
+            True,
+            seed + 300,
+            deterministic,
+            False,
+            max_steps,
+            reward_profile,
+        ),
     ]
     aggregate_quality = float(np.mean([summary.quality_score for summary in summaries]))
     aggregate_goals_for = int(sum(summary.goals_for for summary in summaries))
@@ -592,8 +629,22 @@ def eval_entry(
     max_steps: Annotated[
         int | None, typer.Option(help="Optional max steps per evaluation episode.")
     ] = 450,
+    reward_profile: Annotated[
+        str, typer.Option(help=f"Reward profile: {', '.join(sorted(REWARD_PROFILES))}.")
+    ] = "simple",
 ) -> None:
-    run_eval(model, episodes, opponent_model, opponent, self_play, seed, deterministic, render, max_steps)
+    run_eval(
+        model,
+        episodes,
+        opponent_model,
+        opponent,
+        self_play,
+        seed,
+        deterministic,
+        render,
+        max_steps,
+        reward_profile,
+    )
 
 
 @watch_app.callback(invoke_without_command=True)
@@ -612,6 +663,9 @@ def watch_entry(
     max_steps: Annotated[
         int | None, typer.Option(help="Optional max steps per watch episode.")
     ] = 450,
+    reward_profile: Annotated[
+        str, typer.Option(help=f"Reward profile: {', '.join(sorted(REWARD_PROFILES))}.")
+    ] = "simple",
 ) -> None:
     run_eval(
         model_path=model,
@@ -623,6 +677,7 @@ def watch_entry(
         deterministic=True,
         render=True,
         max_steps=max_steps,
+        reward_profile=reward_profile,
     )
 
 
@@ -635,8 +690,11 @@ def benchmark_entry(
     max_steps: Annotated[
         int | None, typer.Option(help="Optional max steps per evaluation episode.")
     ] = 450,
+    reward_profile: Annotated[
+        str, typer.Option(help=f"Reward profile: {', '.join(sorted(REWARD_PROFILES))}.")
+    ] = "simple",
 ) -> None:
-    run_benchmark(model, episodes, seed, deterministic, max_steps)
+    run_benchmark(model, episodes, seed, deterministic, max_steps, reward_profile)
 
 
 @play_app.callback(invoke_without_command=True)
@@ -707,8 +765,20 @@ def eval_command(
     deterministic: bool = True,
     render: bool = False,
     max_steps: int | None = 450,
+    reward_profile: str = "simple",
 ) -> None:
-    run_eval(model, episodes, opponent_model, opponent, self_play, seed, deterministic, render, max_steps)
+    run_eval(
+        model,
+        episodes,
+        opponent_model,
+        opponent,
+        self_play,
+        seed,
+        deterministic,
+        render,
+        max_steps,
+        reward_profile,
+    )
 
 
 @app.command()
@@ -720,6 +790,7 @@ def watch(
     episodes: int = 5,
     seed: int = 17,
     max_steps: int | None = 450,
+    reward_profile: str = "simple",
 ) -> None:
     run_eval(
         model,
@@ -731,6 +802,7 @@ def watch(
         deterministic=True,
         render=True,
         max_steps=max_steps,
+        reward_profile=reward_profile,
     )
 
 
@@ -741,8 +813,9 @@ def benchmark(
     seed: int = 31,
     deterministic: bool = True,
     max_steps: int | None = 450,
+    reward_profile: str = "simple",
 ) -> None:
-    run_benchmark(model, episodes, seed, deterministic, max_steps)
+    run_benchmark(model, episodes, seed, deterministic, max_steps, reward_profile)
 
 
 @app.command()
