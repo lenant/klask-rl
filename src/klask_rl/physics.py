@@ -52,6 +52,7 @@ class KlaskPhysics:
         self.magnet_shapes: list[pymunk.Circle] = []
         self.magnet_attached_to: list[str | None] = []
         self.magnet_attracted_to: list[str | None] = []
+        self._magnet_attached_offsets: list[pymunk.Vec2d] = []
         self._magnet_contact_frames: list[dict[str, int]] = []
         self.paused = False
         self._screen: Any | None = None
@@ -78,6 +79,7 @@ class KlaskPhysics:
         self.magnet_shapes = []
         self.magnet_attached_to = []
         self.magnet_attracted_to = []
+        self._magnet_attached_offsets = []
         self._magnet_contact_frames = []
         self.paused = False
 
@@ -151,6 +153,7 @@ class KlaskPhysics:
         self.magnet_shapes.append(shape)
         self.magnet_attached_to.append(None)
         self.magnet_attracted_to.append(None)
+        self._magnet_attached_offsets.append(pymunk.Vec2d.zero())
         self._magnet_contact_frames.append({agent: 0 for agent in AGENTS})
 
     def step(self, world_actions: dict[str, np.ndarray]) -> PhysicsStepResult:
@@ -165,8 +168,10 @@ class KlaskPhysics:
         contacts = {agent: False for agent in AGENTS}
         for _ in range(cfg.frame_skip):
             self._apply_magnet_forces()
+            self._pin_attached_magnets()
             self.space.step(cfg.physics_dt)
             self._clamp_handles()
+            self._pin_attached_magnets()
             self._contain_puck()
             self._contain_magnets()
             scored_by = self._detect_goal()
@@ -177,6 +182,7 @@ class KlaskPhysics:
             self._separate_handles_from_magnets()
             self._contain_magnets()
             self._update_magnet_attachment_state()
+            self._pin_attached_magnets()
             scored_by = self._detect_magnet_score()
             if scored_by is not None:
                 score_reason = "magnets"
@@ -202,6 +208,9 @@ class KlaskPhysics:
     def _apply_magnet_forces(self) -> None:
         self.magnet_attracted_to = [None for _ in self.magnet_bodies]
         for index, magnet_body in enumerate(self.magnet_bodies):
+            if self.magnet_attached_to[index] is not None:
+                self.magnet_attracted_to[index] = self.magnet_attached_to[index]
+                continue
             strongest_agent: str | None = None
             strongest_force = 0.0
             for agent, handle_body in self.handle_bodies.items():
@@ -218,13 +227,39 @@ class KlaskPhysics:
                     strongest_agent = agent
             self.magnet_attracted_to[index] = strongest_agent
 
+    def _magnet_bounds(self) -> tuple[float, float, float, float]:
+        cfg = self.config
+        return (
+            -cfg.half_width + cfg.magnet_radius,
+            cfg.half_width - cfg.magnet_radius,
+            -cfg.half_height + cfg.magnet_radius,
+            cfg.half_height - cfg.magnet_radius,
+        )
+
+    def _clamped_magnet_position(self, position: pymunk.Vec2d) -> pymunk.Vec2d:
+        x_min, x_max, y_min, y_max = self._magnet_bounds()
+        return pymunk.Vec2d(
+            float(np.clip(position.x, x_min, x_max)),
+            float(np.clip(position.y, y_min, y_max)),
+        )
+
+    def _pin_attached_magnets(self) -> None:
+        for index, attached_agent in enumerate(self.magnet_attached_to):
+            if attached_agent is None:
+                continue
+            handle_body = self.handle_bodies[attached_agent]
+            magnet_body = self.magnet_bodies[index]
+            target = self._clamped_magnet_position(handle_body.position + self._magnet_attached_offsets[index])
+            magnet_body.position = target
+            magnet_body.velocity = handle_body.velocity
+            magnet_body.angular_velocity = 0.0
+
     def _contain_magnets(self) -> None:
         cfg = self.config
-        x_min = -cfg.half_width + cfg.magnet_radius
-        x_max = cfg.half_width - cfg.magnet_radius
-        y_min = -cfg.half_height + cfg.magnet_radius
-        y_max = cfg.half_height - cfg.magnet_radius
-        for body in self.magnet_bodies:
+        x_min, x_max, y_min, y_max = self._magnet_bounds()
+        for index, body in enumerate(self.magnet_bodies):
+            if self.magnet_attached_to[index] is not None:
+                continue
             x = body.position.x
             y = body.position.y
             vx = body.velocity.x
@@ -256,7 +291,9 @@ class KlaskPhysics:
     def _separate_handles_from_magnets(self) -> None:
         cfg = self.config
         min_distance = cfg.magnet_radius + cfg.handle_radius + 1e-6
-        for magnet_body in self.magnet_bodies:
+        for index, magnet_body in enumerate(self.magnet_bodies):
+            if self.magnet_attached_to[index] is not None:
+                continue
             for agent, handle_body in self.handle_bodies.items():
                 delta = magnet_body.position - handle_body.position
                 distance = delta.length
@@ -280,12 +317,8 @@ class KlaskPhysics:
         for index, magnet_body in enumerate(self.magnet_bodies):
             attached_agent = self.magnet_attached_to[index]
             if attached_agent is not None:
-                distance = (magnet_body.position - self.handle_bodies[attached_agent].position).length
-                if distance <= cfg.magnet_release_distance:
-                    self._magnet_contact_frames[index][attached_agent] = cfg.magnet_attach_frames
-                    continue
-                self.magnet_attached_to[index] = None
-                self._magnet_contact_frames[index] = {agent: 0 for agent in AGENTS}
+                self._magnet_contact_frames[index][attached_agent] = cfg.magnet_attach_frames
+                continue
 
             candidate: str | None = None
             candidate_distance = float("inf")
@@ -303,6 +336,18 @@ class KlaskPhysics:
                     self._magnet_contact_frames[index][agent] = 0
             if candidate is not None:
                 self.magnet_attached_to[index] = candidate
+                self._magnet_attached_offsets[index] = self._sticky_offset(
+                    self.magnet_bodies[index].position - self.handle_bodies[candidate].position,
+                    candidate,
+                )
+
+    def _sticky_offset(self, offset: pymunk.Vec2d, agent: str) -> pymunk.Vec2d:
+        distance = offset.length
+        if distance > 1e-9:
+            normal = offset / distance
+        else:
+            normal = pymunk.Vec2d(-1.0 if agent == "left" else 1.0, 0.0)
+        return normal * (self.config.handle_radius + self.config.magnet_radius)
 
     def magnet_attachment_counts(self) -> dict[str, int]:
         return {

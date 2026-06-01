@@ -14,12 +14,12 @@ class ArenaConfig:
     magnet_count: int = 3
     magnet_radius: float = 0.026
     magnet_mass: float = 0.03
-    magnet_attraction_range: float = 0.28
-    magnet_attraction_strength: float = 0.11
-    magnet_max_force: float = 0.12
+    magnet_attraction_range: float = 0.42
+    magnet_attraction_strength: float = 2.0
+    magnet_max_force: float = 1.0
     magnet_friction: float = 0.75
     magnet_elasticity: float = 0.35
-    magnet_attach_frames: int = 4
+    magnet_attach_frames: int = 2
     magnet_release_distance: float = 0.16
     magnet_score_threshold: int = 2
     puck_mass: float = 0.045
