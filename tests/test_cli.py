@@ -63,6 +63,7 @@ def test_train_help_exposes_policy_net_arch() -> None:
     assert result.exit_code == 0
     assert "--policy-net-arch" in result.output
     assert "--resume-from" in result.output
+    assert "--resume-opponent-checkpoints" in result.output
 
 
 def test_parse_policy_net_arch_accepts_commas_and_x() -> None:

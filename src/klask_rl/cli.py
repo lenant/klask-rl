@@ -244,6 +244,7 @@ def run_train(
     device: str,
     policy_net_arch: str,
     resume_from: Path | None,
+    resume_opponent_checkpoints: int,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     latest_dir = output_dir / "latest"
@@ -264,6 +265,8 @@ def run_train(
         model = PPO.load(resume_from, env=env, device=device)
         model.verbose = 1
         checkpoint_paths = existing_snapshot_paths(snapshot_dir, max_step=model.num_timesteps)
+        if resume_opponent_checkpoints >= 0:
+            checkpoint_paths = checkpoint_paths[-resume_opponent_checkpoints:]
         add_opponent_checkpoints(pool, env, checkpoint_paths)
         initial_last_save = (model.num_timesteps // snapshot_freq) * snapshot_freq
         remaining_steps = max(0, total_steps - model.num_timesteps)
@@ -274,6 +277,7 @@ def run_train(
                 "target_total_steps": total_steps,
                 "remaining_steps": remaining_steps,
                 "restored_opponent_checkpoints": len(checkpoint_paths),
+                "resume_opponent_checkpoints": resume_opponent_checkpoints,
                 "next_snapshot_at": initial_last_save + snapshot_freq,
             }
         )
@@ -665,6 +669,15 @@ def train_entry(
             )
         ),
     ] = None,
+    resume_opponent_checkpoints: Annotated[
+        int,
+        typer.Option(
+            help=(
+                "How many recent checkpoint opponents to restore on resume. "
+                "Use -1 to restore every historical snapshot."
+            )
+        ),
+    ] = 64,
 ) -> None:
     run_train(
         total_steps,
@@ -683,6 +696,7 @@ def train_entry(
         device,
         policy_net_arch,
         resume_from,
+        resume_opponent_checkpoints,
     )
 
 
@@ -810,6 +824,7 @@ def train(
     device: str = "auto",
     policy_net_arch: str = "64,64",
     resume_from: Path | None = None,
+    resume_opponent_checkpoints: int = 64,
 ) -> None:
     run_train(
         total_steps,
@@ -828,6 +843,7 @@ def train(
         device,
         policy_net_arch,
         resume_from,
+        resume_opponent_checkpoints,
     )
 
 
