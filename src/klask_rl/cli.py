@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -34,6 +35,7 @@ eval_app = typer.Typer(add_completion=False)
 watch_app = typer.Typer(add_completion=False)
 benchmark_app = typer.Typer(add_completion=False)
 play_app = typer.Typer(add_completion=False)
+SNAPSHOT_RE = re.compile(r"policy_(\d+)\.zip$")
 
 
 @dataclass(frozen=True)
@@ -100,12 +102,19 @@ class EvaluationSummary:
 
 
 class SelfPlaySnapshotCallback(BaseCallback):
-    def __init__(self, pool: OpponentPool, snapshot_dir: Path, save_freq: int, verbose: int = 0):
+    def __init__(
+        self,
+        pool: OpponentPool,
+        snapshot_dir: Path,
+        save_freq: int,
+        initial_last_save: int = 0,
+        verbose: int = 0,
+    ):
         super().__init__(verbose=verbose)
         self.pool = pool
         self.snapshot_dir = snapshot_dir
         self.save_freq = max(1, save_freq)
-        self._last_save = 0
+        self._last_save = initial_last_save
 
     def _on_training_start(self) -> None:
         self.snapshot_dir.mkdir(parents=True, exist_ok=True)
@@ -148,6 +157,31 @@ def make_training_pool(seed: int) -> OpponentPool:
         ],
         seed=seed,
     )
+
+
+def snapshot_step(path: Path) -> int | None:
+    match = SNAPSHOT_RE.fullmatch(path.name)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def existing_snapshot_paths(snapshot_dir: Path, max_step: int | None = None) -> list[Path]:
+    snapshots: list[tuple[int, Path]] = []
+    for path in snapshot_dir.glob("policy_*.zip"):
+        step = snapshot_step(path)
+        if step is None:
+            continue
+        if max_step is not None and step > max_step:
+            continue
+        snapshots.append((step, path))
+    return [path for _, path in sorted(snapshots)]
+
+
+def add_opponent_checkpoints(pool: OpponentPool, env: VecEnv, checkpoint_paths: list[Path]) -> None:
+    for checkpoint_path in checkpoint_paths:
+        pool.add_checkpoint(checkpoint_path)
+        env.env_method("add_opponent_checkpoint", str(checkpoint_path))
 
 
 def build_vec_env(
@@ -209,10 +243,12 @@ def run_train(
     vec_env: str,
     device: str,
     policy_net_arch: str,
+    resume_from: Path | None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     latest_dir = output_dir / "latest"
     latest_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_dir = latest_dir / "snapshots"
     net_arch = parse_policy_net_arch(policy_net_arch)
     pool = make_training_pool(seed)
     env = build_vec_env(
@@ -222,47 +258,76 @@ def run_train(
         reward_profile=reward_profile,
         vec_env=vec_env,
     )
-    model = PPO(
-        "MlpPolicy",
-        env,
-        n_steps=n_steps,
-        batch_size=batch_size,
-        n_epochs=5,
-        learning_rate=3e-4,
-        gamma=0.985,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        tensorboard_log=str(output_dir / "tensorboard"),
-        seed=seed,
-        device=device,
-        policy_kwargs={"net_arch": list(net_arch)},
-        verbose=1,
-    )
-    console.print({"policy_net_arch": net_arch})
-    bc_stats = pretrain_policy_with_behavior_cloning(
-        model,
-        samples=bc_samples,
-        epochs=bc_epochs,
-        batch_size=bc_batch_size,
-        seed=seed,
-        max_steps=max_steps,
-        reward_profile=reward_profile,
-    )
-    if bc_stats.samples:
+    if resume_from is not None:
+        if not resume_from.exists():
+            raise FileNotFoundError(f"resume checkpoint not found: {resume_from}")
+        model = PPO.load(resume_from, env=env, device=device)
+        model.verbose = 1
+        checkpoint_paths = existing_snapshot_paths(snapshot_dir, max_step=model.num_timesteps)
+        add_opponent_checkpoints(pool, env, checkpoint_paths)
+        initial_last_save = (model.num_timesteps // snapshot_freq) * snapshot_freq
+        remaining_steps = max(0, total_steps - model.num_timesteps)
         console.print(
             {
-                "behavior_cloning_samples": bc_stats.samples,
-                "behavior_cloning_epochs": bc_stats.epochs,
-                "behavior_cloning_final_loss": bc_stats.final_loss,
+                "resume_from": str(resume_from),
+                "starting_num_timesteps": model.num_timesteps,
+                "target_total_steps": total_steps,
+                "remaining_steps": remaining_steps,
+                "restored_opponent_checkpoints": len(checkpoint_paths),
+                "next_snapshot_at": initial_last_save + snapshot_freq,
             }
         )
+    else:
+        model = PPO(
+            "MlpPolicy",
+            env,
+            n_steps=n_steps,
+            batch_size=batch_size,
+            n_epochs=5,
+            learning_rate=3e-4,
+            gamma=0.985,
+            gae_lambda=0.95,
+            clip_range=0.2,
+            tensorboard_log=str(output_dir / "tensorboard"),
+            seed=seed,
+            device=device,
+            policy_kwargs={"net_arch": list(net_arch)},
+            verbose=1,
+        )
+        initial_last_save = 0
+        remaining_steps = total_steps
+        console.print({"policy_net_arch": net_arch})
+        bc_stats = pretrain_policy_with_behavior_cloning(
+            model,
+            samples=bc_samples,
+            epochs=bc_epochs,
+            batch_size=bc_batch_size,
+            seed=seed,
+            max_steps=max_steps,
+            reward_profile=reward_profile,
+        )
+        if bc_stats.samples:
+            console.print(
+                {
+                    "behavior_cloning_samples": bc_stats.samples,
+                    "behavior_cloning_epochs": bc_stats.epochs,
+                    "behavior_cloning_final_loss": bc_stats.final_loss,
+                }
+            )
     callback = SelfPlaySnapshotCallback(
         pool=pool,
-        snapshot_dir=latest_dir / "snapshots",
+        snapshot_dir=snapshot_dir,
         save_freq=snapshot_freq,
+        initial_last_save=initial_last_save,
         verbose=1,
     )
-    model.learn(total_timesteps=total_steps, callback=callback, progress_bar=False)
+    if remaining_steps > 0:
+        model.learn(
+            total_timesteps=remaining_steps,
+            callback=callback,
+            progress_bar=False,
+            reset_num_timesteps=resume_from is None,
+        )
     final_path = latest_dir / "final_model"
     model.save(final_path)
     env.close()
@@ -282,7 +347,7 @@ def run_eval(
     max_steps: int | None,
     reward_profile: str,
 ) -> EvaluationSummary:
-    model = PPO.load(model_path)
+    model = PPO.load(model_path, device="cpu")
     if self_play and opponent_model is None:
         opponent_model = model_path
     opponent_policy = (
@@ -591,6 +656,15 @@ def train_entry(
     policy_net_arch: Annotated[
         str, typer.Option(help="PPO MLP hidden sizes, e.g. 64,64 or 256x256x256.")
     ] = "64,64",
+    resume_from: Annotated[
+        Path | None,
+        typer.Option(
+            help=(
+                "Optional PPO checkpoint to continue from. "
+                "When set, total-steps is treated as the final target timestep."
+            )
+        ),
+    ] = None,
 ) -> None:
     run_train(
         total_steps,
@@ -608,6 +682,7 @@ def train_entry(
         vec_env,
         device,
         policy_net_arch,
+        resume_from,
     )
 
 
@@ -734,6 +809,7 @@ def train(
     vec_env: str = "dummy",
     device: str = "auto",
     policy_net_arch: str = "64,64",
+    resume_from: Path | None = None,
 ) -> None:
     run_train(
         total_steps,
@@ -751,6 +827,7 @@ def train(
         vec_env,
         device,
         policy_net_arch,
+        resume_from,
     )
 
 
