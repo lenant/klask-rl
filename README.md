@@ -38,7 +38,8 @@ uv run pytest
 
 ## Download Demo Model
 
-The trained demo policy is published as a GitHub Release asset, not committed to git.
+The trained demo policy is the best checkpoint from the completed 50M-step PPO run. It is
+published as a GitHub Release asset, not committed to git.
 Download it into the path used by the commands below:
 
 ```bash
@@ -84,12 +85,12 @@ The current stronger setup uses a larger PPO network, behavior-cloning warm star
 self-play environments, simple reward, and automatic snapshots:
 
 ```bash
-uv run klask-train --total-steps 5000000 --num-envs 16 --n-steps 1024 \
+uv run klask-train --total-steps 50000000 --num-envs 16 --n-steps 1024 \
   --batch-size 1024 --snapshot-freq 100000 --max-steps 450 \
   --reward-profile simple --bc-samples 12000 --bc-epochs 8 \
   --bc-batch-size 512 --vec-env subproc --device cuda \
   --policy-net-arch 256x256x256 \
-  --output-dir runs/remote_simple_ppo_256x3_5m
+  --output-dir runs/remote_simple_ppo_256x3_50m
 ```
 
 Use `--device cpu` or `--device auto` on machines without CUDA.
@@ -123,16 +124,17 @@ During long training runs, benchmark snapshots automatically and keep only new l
 
 ```bash
 PYTHONPATH=src uv run python scripts/benchmark_snapshots.py \
-  --snapshot-dir runs/remote_simple_ppo_256x3_5m/latest/snapshots \
-  --csv runs/remote_simple_ppo_256x3_5m/benchmark_results.csv \
-  --leader-dir runs/remote_simple_ppo_256x3_5m/leaders \
+  --snapshot-dir runs/remote_simple_ppo_256x3_50m/latest/snapshots \
+  --csv runs/remote_simple_ppo_256x3_50m/benchmark_results.csv \
+  --leader-dir runs/remote_simple_ppo_256x3_50m/leaders \
   --leader-copy runs/klask/latest/simple_leader.zip \
   --episodes 20 --reward-profile simple
 ```
 
-The best 5M-step run so far used `--policy-net-arch 256x256x256` with the simple reward
-profile. Its final leader reached aggregate quality `5.393`, with `33` goals for and `1`
-goal against across the four 20-episode benchmark matchups.
+The best checkpoint from the completed 50M-step run used `--policy-net-arch 256x256x256`
+with the simple reward profile. The top evaluated leader was the 15M-step checkpoint:
+aggregate quality `5.600`, with `32` goals for and `3` goals against across the four
+20-episode benchmark matchups.
 
 ## Reward Profile
 
