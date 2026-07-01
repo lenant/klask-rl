@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
 class ArenaConfig:
+    # Real Klask playing field is 40 x 30 cm; 1 unit = 20 cm.
     width: float = 2.0
-    height: float = 1.2
-    goal_width: float = 0.34
+    height: float = 1.5
+    goal_radius: float = 0.075
+    goal_center_offset: float = 0.225
     wall_radius: float = 0.018
     puck_radius: float = 0.035
-    handle_radius: float = 0.07
+    handle_radius: float = 0.04
     magnet_count: int = 3
     magnet_radius: float = 0.026
     magnet_mass: float = 0.03
@@ -46,8 +49,27 @@ class ArenaConfig:
         return self.height / 2.0
 
     @property
-    def goal_half_width(self) -> float:
-        return self.goal_width / 2.0
+    def goal_center_x(self) -> float:
+        return self.half_width - self.goal_center_offset
+
+    @property
+    def puck_capture_radius(self) -> float:
+        return math.sqrt(self.goal_radius**2 - self.puck_radius**2)
+
+    @property
+    def handle_klask_radius(self) -> float:
+        return self.goal_radius - self.handle_radius / 2.0
+
+    @property
+    def magnet_capture_radius(self) -> float:
+        return math.sqrt(self.goal_radius**2 - self.magnet_radius**2)
+
+    def goal_center(self, side: str) -> tuple[float, float]:
+        if side == "left":
+            return (-self.goal_center_x, 0.0)
+        if side == "right":
+            return (self.goal_center_x, 0.0)
+        raise ValueError(f"unknown side {side!r}; expected 'left' or 'right'")
 
     @property
     def control_dt(self) -> float:

@@ -1,9 +1,12 @@
 # Klask RL
 
-Klask RL is a small reinforcement-learning playground for a Klask-inspired table game.
-It is currently closer to fast air hockey than full physical Klask: two handles move on
-their own halves of the board, push a puck toward the opposite goal, and must avoid three
-magnetic biscuits that can attach to a handle.
+Klask RL is a small reinforcement-learning playground for the table game Klask.
+The board follows the real game: a 40 x 30 cm playing field (1 simulation unit = 20 cm)
+with a circular goal hole sunk into each half instead of wall gates. Two handles move on
+their own halves of the board and try to send the ball into the opposite hole. A point
+ends the episode when the ball drops into either hole (the hole's owner concedes, own
+goals included), when a handle falls into its own hole ("klask"), or when two of the
+three magnetic biscuits attach to a handle.
 
 The repository contains:
 
@@ -22,8 +25,12 @@ Five self-play episodes recorded from the current PPO leader:
 [Open the MP4 version](docs/assets/klask-self-play-5-episodes.mp4)
 
 The red and blue circles are the handles, the white circle is the puck, and the small gray
-circles are the magnets. The side panels show the current step reward, episode total, and
-every reward component for each side.
+circles are the magnets. The dark circles near each end are the goal holes; a biscuit that
+slides into a hole stays there, inert, until the next reset. The side panels show the
+current step reward, episode total, and every reward component for each side.
+
+Note: the demo video above was recorded on the older board that still used wall gates
+instead of goal holes; the checkpoint also predates the hole-based rules.
 
 ## Setup
 

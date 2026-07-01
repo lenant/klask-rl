@@ -224,3 +224,17 @@ def test_magnet_scoring_terminates_episode_with_reason() -> None:
     assert infos["left"]["scored_by"] == "right"
     assert infos["left"]["score_reason"] == "magnets"
     assert infos["left"]["magnet_counts"]["left"] == 2
+
+
+def test_klask_terminates_episode_with_reason() -> None:
+    env = KlaskParallelEnv()
+    env.reset(seed=45)
+    env.physics.handle_bodies["left"].position = env.physics.config.goal_center("left")
+
+    actions = {agent: np.zeros(2, dtype=np.float32) for agent in AGENTS}
+    _, _, terminations, _, infos = env.step(actions)
+
+    assert terminations == {"left": True, "right": True}
+    assert infos["left"]["score"] == {"left": 0, "right": 1}
+    assert infos["left"]["scored_by"] == "right"
+    assert infos["left"]["score_reason"] == "klask"

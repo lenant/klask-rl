@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import pymunk
 
-from klask_rl.config import AGENTS, ArenaConfig
+from klask_rl.config import AGENTS, OPPONENT, ArenaConfig
 
 
 @dataclass(frozen=True)
@@ -39,8 +39,10 @@ REWARD_COMPONENT_LABELS: tuple[tuple[str, str], ...] = (
 class KlaskPhysics:
     """Pymunk-backed puck and handle simulation.
 
-    Coordinates are centered on the arena. The left goal is at negative x and
-    the right goal is at positive x.
+    Coordinates are centered on the arena. Each half has a circular goal hole
+    sunk into the board: the left hole at negative x and the right hole at
+    positive x. The ball falling into a hole scores for the other side, and a
+    handle falling into its own hole loses the point ("klask").
     """
 
     def __init__(self, config: ArenaConfig | None = None) -> None:
@@ -54,6 +56,7 @@ class KlaskPhysics:
         self.magnet_shapes: list[pymunk.Circle] = []
         self.magnet_attached_to: list[str | None] = []
         self.magnet_attracted_to: list[str | None] = []
+        self.magnet_in_hole: list[bool] = []
         self._magnet_attached_offsets: list[pymunk.Vec2d] = []
         self._magnet_contact_frames: list[dict[str, int]] = []
         self.paused = False
@@ -82,6 +85,7 @@ class KlaskPhysics:
         self.magnet_shapes = []
         self.magnet_attached_to = []
         self.magnet_attracted_to = []
+        self.magnet_in_hole = []
         self._magnet_attached_offsets = []
         self._magnet_contact_frames = []
         self.paused = False
@@ -133,15 +137,12 @@ class KlaskPhysics:
         cfg = self.config
         hw = cfg.half_width
         hh = cfg.half_height
-        gap = cfg.goal_half_width
         static = self.space.static_body
         wall_segments = [
             ((-hw, hh), (hw, hh)),
             ((-hw, -hh), (hw, -hh)),
-            ((-hw, -hh), (-hw, -gap)),
-            ((-hw, gap), (-hw, hh)),
-            ((hw, -hh), (hw, -gap)),
-            ((hw, gap), (hw, hh)),
+            ((-hw, -hh), (-hw, hh)),
+            ((hw, -hh), (hw, hh)),
         ]
         for start, end in wall_segments:
             shape = pymunk.Segment(static, start, end, cfg.wall_radius)
@@ -161,7 +162,8 @@ class KlaskPhysics:
         self.handle_shapes[agent] = shape
 
     def _magnet_start_positions(self) -> list[tuple[float, float]]:
-        positions = [(0.0, -0.24), (0.0, 0.0), (0.0, 0.24)]
+        spacing = self.config.half_height / 2.0
+        positions = [(0.0, -spacing), (0.0, 0.0), (0.0, spacing)]
         return positions[: self.config.magnet_count]
 
     def _add_magnet(self, position: tuple[float, float]) -> None:
@@ -177,6 +179,7 @@ class KlaskPhysics:
         self.magnet_shapes.append(shape)
         self.magnet_attached_to.append(None)
         self.magnet_attracted_to.append(None)
+        self.magnet_in_hole.append(False)
         self._magnet_attached_offsets.append(pymunk.Vec2d.zero())
         self._magnet_contact_frames.append({agent: 0 for agent in AGENTS})
 
@@ -198,13 +201,13 @@ class KlaskPhysics:
             self._pin_attached_magnets()
             self._contain_puck()
             self._contain_magnets()
-            scored_by = self._detect_goal()
+            scored_by, score_reason = self._detect_hole_events()
             if scored_by is not None:
-                score_reason = "goal"
                 break
             self._separate_handles_from_puck()
             self._separate_handles_from_magnets()
             self._contain_magnets()
+            self._capture_magnets_in_holes()
             self._update_magnet_attachment_state()
             self._pin_attached_magnets()
             scored_by = self._detect_magnet_score()
@@ -234,6 +237,8 @@ class KlaskPhysics:
     def _apply_magnet_forces(self) -> None:
         self.magnet_attracted_to = [None for _ in self.magnet_bodies]
         for index, magnet_body in enumerate(self.magnet_bodies):
+            if self.magnet_in_hole[index]:
+                continue
             if self.magnet_attached_to[index] is not None:
                 self.magnet_attracted_to[index] = self.magnet_attached_to[index]
                 continue
@@ -284,7 +289,7 @@ class KlaskPhysics:
         cfg = self.config
         x_min, x_max, y_min, y_max = self._magnet_bounds()
         for index, body in enumerate(self.magnet_bodies):
-            if self.magnet_attached_to[index] is not None:
+            if self.magnet_attached_to[index] is not None or self.magnet_in_hole[index]:
                 continue
             x = body.position.x
             y = body.position.y
@@ -318,7 +323,7 @@ class KlaskPhysics:
         cfg = self.config
         min_distance = cfg.magnet_radius + cfg.handle_radius + 1e-6
         for index, magnet_body in enumerate(self.magnet_bodies):
-            if self.magnet_attached_to[index] is not None:
+            if self.magnet_attached_to[index] is not None or self.magnet_in_hole[index]:
                 continue
             for agent, handle_body in self.handle_bodies.items():
                 delta = magnet_body.position - handle_body.position
@@ -341,6 +346,8 @@ class KlaskPhysics:
         cfg = self.config
         attach_distance = cfg.handle_radius + cfg.magnet_radius + 0.008
         for index, magnet_body in enumerate(self.magnet_bodies):
+            if self.magnet_in_hole[index]:
+                continue
             attached_agent = self.magnet_attached_to[index]
             if attached_agent is not None:
                 self._magnet_contact_frames[index][attached_agent] = cfg.magnet_attach_frames
@@ -387,7 +394,7 @@ class KlaskPhysics:
         proximity = 0.0
         handle_position = self.handle_bodies[agent].position
         for index, magnet_body in enumerate(self.magnet_bodies):
-            if self.magnet_attached_to[index] is not None:
+            if self.magnet_attached_to[index] is not None or self.magnet_in_hole[index]:
                 continue
             distance = (magnet_body.position - handle_position).length
             if distance < cfg.magnet_attraction_range:
@@ -481,9 +488,20 @@ class KlaskPhysics:
         y = puck.position.y
         vx = puck.velocity.x
         vy = puck.velocity.y
+        x_min = -cfg.half_width + cfg.puck_radius
+        x_max = cfg.half_width - cfg.puck_radius
         y_min = -cfg.half_height + cfg.puck_radius
         y_max = cfg.half_height - cfg.puck_radius
         changed = False
+
+        if x > x_max:
+            x = x_max
+            vx = -abs(vx) * cfg.wall_elasticity
+            changed = True
+        elif x < x_min:
+            x = x_min
+            vx = abs(vx) * cfg.wall_elasticity
+            changed = True
 
         if y > y_max:
             y = y_max
@@ -539,7 +557,7 @@ class KlaskPhysics:
     def _limit_magnet_speeds(self) -> None:
         max_speed = self.config.max_magnet_speed
         for index, body in enumerate(self.magnet_bodies):
-            if self.magnet_attached_to[index] is not None:
+            if self.magnet_attached_to[index] is not None or self.magnet_in_hole[index]:
                 continue
             speed = body.velocity.length
             if speed > max_speed:
@@ -548,7 +566,7 @@ class KlaskPhysics:
     def _apply_magnet_friction(self) -> None:
         multiplier = max(0.0, 1.0 - self.config.magnet_linear_friction * self.config.physics_dt)
         for index, body in enumerate(self.magnet_bodies):
-            if self.magnet_attached_to[index] is not None:
+            if self.magnet_attached_to[index] is not None or self.magnet_in_hole[index]:
                 continue
             body.velocity = body.velocity * multiplier
             body.angular_velocity *= multiplier
@@ -558,23 +576,39 @@ class KlaskPhysics:
         delta = self.puck_body.position - self.handle_bodies[agent].position
         return delta.length <= cfg.puck_radius + cfg.handle_radius + 0.012
 
-    def _detect_goal(self) -> str | None:
+    def _detect_hole_events(self) -> tuple[str | None, str | None]:
         cfg = self.config
-        puck = self.puck_body
-        x = puck.position.x
-        y = puck.position.y
-        if x > cfg.half_width and abs(y) <= cfg.goal_half_width:
-            return "left"
-        if x < -cfg.half_width and abs(y) <= cfg.goal_half_width:
-            return "right"
+        for side in AGENTS:
+            hole = pymunk.Vec2d(*cfg.goal_center(side))
+            if (self.puck_body.position - hole).length < cfg.puck_capture_radius:
+                self.puck_body.position = hole
+                self.puck_body.velocity = (0.0, 0.0)
+                return OPPONENT[side], "goal"
+        for agent in AGENTS:
+            hole = pymunk.Vec2d(*cfg.goal_center(agent))
+            handle_body = self.handle_bodies[agent]
+            if (handle_body.position - hole).length < cfg.handle_klask_radius:
+                handle_body.position = hole
+                handle_body.velocity = (0.0, 0.0)
+                return OPPONENT[agent], "klask"
+        return None, None
 
-        if x > cfg.half_width and abs(y) > cfg.goal_half_width:
-            puck.position = (cfg.half_width - cfg.puck_radius, y)
-            puck.velocity = (-abs(puck.velocity.x) * cfg.wall_elasticity, puck.velocity.y)
-        elif x < -cfg.half_width and abs(y) > cfg.goal_half_width:
-            puck.position = (-cfg.half_width + cfg.puck_radius, y)
-            puck.velocity = (abs(puck.velocity.x) * cfg.wall_elasticity, puck.velocity.y)
-        return None
+    def _capture_magnets_in_holes(self) -> None:
+        cfg = self.config
+        hole_centers = [pymunk.Vec2d(*cfg.goal_center(side)) for side in AGENTS]
+        for index, magnet_body in enumerate(self.magnet_bodies):
+            if self.magnet_attached_to[index] is not None or self.magnet_in_hole[index]:
+                continue
+            for hole in hole_centers:
+                if (magnet_body.position - hole).length >= cfg.magnet_capture_radius:
+                    continue
+                self.magnet_in_hole[index] = True
+                self.space.remove(magnet_body, self.magnet_shapes[index])
+                magnet_body.position = hole
+                magnet_body.velocity = (0.0, 0.0)
+                magnet_body.angular_velocity = 0.0
+                self._magnet_contact_frames[index] = {agent: 0 for agent in AGENTS}
+                break
 
     def snapshot(self) -> dict[str, np.ndarray]:
         return {
@@ -628,17 +662,12 @@ class KlaskPhysics:
         arena_rect = pygame.Rect(arena_left, 0, arena_width, arena_height)
         pygame.draw.rect(surface, (22, 92, 98), arena_rect)
         pygame.draw.rect(surface, (238, 232, 212), arena_rect, 3)
-        goal_px = int(cfg.goal_width / cfg.height * arena_height)
-        pygame.draw.rect(
-            surface,
-            (235, 81, 75),
-            pygame.Rect(arena_left, arena_height // 2 - goal_px // 2, 8, goal_px),
-        )
-        pygame.draw.rect(
-            surface,
-            (74, 126, 234),
-            pygame.Rect(arena_left + arena_width - 8, arena_height // 2 - goal_px // 2, 8, goal_px),
-        )
+        hole_rims = {"left": (235, 81, 75), "right": (74, 126, 234)}
+        for side, rim_color in hole_rims.items():
+            center = to_screen(cfg.goal_center(side))
+            radius = to_px(cfg.goal_radius)
+            pygame.draw.circle(surface, (10, 14, 18), center, radius)
+            pygame.draw.circle(surface, rim_color, center, radius + 2, 3)
         pygame.draw.line(
             surface,
             (200, 222, 220),
@@ -647,14 +676,17 @@ class KlaskPhysics:
             1,
         )
         for index, magnet_body in enumerate(self.magnet_bodies):
+            center = to_screen(magnet_body.position)
+            radius = to_px(cfg.magnet_radius)
+            if self.magnet_in_hole[index]:
+                pygame.draw.circle(surface, (96, 100, 98), center, radius)
+                continue
             owner = self.magnet_attached_to[index] or self.magnet_attracted_to[index]
             outline = (218, 224, 222)
             if owner == "left":
                 outline = (255, 128, 122)
             elif owner == "right":
                 outline = (120, 162, 255)
-            center = to_screen(magnet_body.position)
-            radius = to_px(cfg.magnet_radius)
             pygame.draw.circle(surface, (226, 230, 224), center, radius)
             pygame.draw.circle(surface, outline, center, radius + 3, 2)
         pygame.draw.circle(surface, (245, 245, 240), to_screen(self.puck_body.position), to_px(cfg.puck_radius))

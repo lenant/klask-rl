@@ -5,13 +5,61 @@ import numpy as np
 from klask_rl.physics import KlaskPhysics
 
 
-def test_goal_detection_right_gate_scores_left() -> None:
+def test_puck_in_right_hole_scores_left() -> None:
     physics = KlaskPhysics()
     physics.reset(seed=1)
-    physics.puck_body.position = (physics.config.half_width + 0.01, 0.0)
-    physics.puck_body.velocity = (0.5, 0.0)
+    hole = physics.config.goal_center("right")
+    physics.puck_body.position = hole
+    physics.puck_body.velocity = (0.0, 0.0)
     result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
     assert result.scored_by == "left"
+    assert result.score_reason == "goal"
+    assert np.allclose(np.array(physics.puck_body.position), np.array(hole))
+
+
+def test_puck_rolling_into_own_hole_scores_opponent() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=1)
+    cfg = physics.config
+    hole = cfg.goal_center("left")
+    physics.puck_body.position = (hole[0] + cfg.puck_capture_radius + 0.02, 0.0)
+    physics.puck_body.velocity = (-1.0, 0.0)
+    physics.handle_bodies["left"].position = (-0.4, 0.4)
+    result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+    assert result.scored_by == "right"
+    assert result.score_reason == "goal"
+
+
+def test_handle_in_own_hole_scores_opponent() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=1)
+    physics.handle_bodies["left"].position = physics.config.goal_center("left")
+    result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+    assert result.scored_by == "right"
+    assert result.score_reason == "klask"
+
+
+def test_handle_can_hover_at_hole_edge_without_klask() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=1)
+    cfg = physics.config
+    hole = cfg.goal_center("left")
+    physics.handle_bodies["left"].position = (hole[0] + cfg.handle_klask_radius + 0.01, 0.0)
+    for _ in range(10):
+        result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+        assert result.scored_by is None
+
+
+def test_puck_bounces_off_solid_end_wall_at_former_gate_center() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=1)
+    cfg = physics.config
+    physics.puck_body.position = (cfg.half_width - cfg.puck_radius - 0.005, 0.0)
+    physics.puck_body.velocity = (2.0, 0.0)
+    result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+    assert result.scored_by is None
+    assert physics.puck_body.position.x <= cfg.half_width - cfg.puck_radius + 1e-6
+    assert physics.puck_body.velocity.x <= 0.0
 
 
 def test_handle_is_clamped_to_own_half() -> None:
@@ -113,9 +161,11 @@ def test_magnets_are_created_inside_arena() -> None:
 
 def test_magnets_start_on_center_line() -> None:
     physics = KlaskPhysics()
+    spacing = physics.config.half_height / 2.0
 
     assert [body.position.x for body in physics.magnet_bodies] == [0.0, 0.0, 0.0]
-    assert [body.position.y for body in physics.magnet_bodies] == [-0.24, 0.0, 0.24]
+    assert [body.position.y for body in physics.magnet_bodies] == [-spacing, 0.0, spacing]
+    assert spacing <= physics.config.half_height - physics.config.magnet_radius
 
 
 def test_puck_starts_on_left_or_right_quarter_without_handle_overlap() -> None:
@@ -150,7 +200,7 @@ def test_far_magnet_does_not_chase_handler() -> None:
     cfg = physics.config
     physics.handle_bodies["left"].position = (-0.4, 0.0)
     physics.handle_bodies["left"].velocity = (0.0, 0.0)
-    physics.handle_bodies["right"].position = (0.8, 0.0)
+    physics.handle_bodies["right"].position = (0.8, 0.3)
     physics.magnet_bodies[0].position = (-0.4 + cfg.magnet_attraction_range + 0.04, 0.0)
     physics.magnet_bodies[0].velocity = (0.0, 0.0)
 
@@ -197,7 +247,7 @@ def test_nearby_magnet_moves_toward_stationary_handler() -> None:
     physics = KlaskPhysics()
     physics.reset(seed=8)
     physics.handle_bodies["left"].position = (-0.4, 0.0)
-    physics.handle_bodies["right"].position = (0.8, 0.0)
+    physics.handle_bodies["right"].position = (0.8, 0.3)
     physics.magnet_bodies[0].position = (-0.24, 0.0)
     physics.magnet_bodies[0].velocity = (0.0, 0.0)
 
@@ -264,3 +314,35 @@ def test_two_attached_magnets_score_for_opponent() -> None:
     assert result.scored_by == "right"
     assert result.score_reason == "magnets"
     assert result.magnet_counts["left"] == 2
+
+
+def test_magnet_in_hole_becomes_inert() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=12)
+    cfg = physics.config
+    hole = cfg.goal_center("left")
+    physics.puck_body.position = (0.5, 0.45)
+    physics.puck_body.velocity = (0.0, 0.0)
+    physics.handle_bodies["left"].position = (-0.4, 0.4)
+    physics.magnet_bodies[0].position = (hole[0] + 0.01, 0.0)
+    physics.magnet_bodies[0].velocity = (0.0, 0.0)
+
+    result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+    assert result.scored_by is None
+    assert physics.magnet_in_hole[0]
+    assert np.allclose(np.array(physics.magnet_bodies[0].position), np.array(hole))
+    assert physics.magnet_bodies[0].velocity.length == 0.0
+
+    physics.handle_bodies["left"].position = (hole[0] + cfg.handle_klask_radius + 0.01, 0.0)
+    for _ in range(5):
+        result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+    assert result.scored_by is None
+    assert physics.magnet_attached_to[0] is None
+    assert physics.magnet_risk("left")["proximity"] == 0.0
+
+    physics.handle_bodies["left"].position = (-0.4, 0.4)
+    physics.puck_body.position = (hole[0] + cfg.puck_capture_radius + 0.02, 0.0)
+    physics.puck_body.velocity = (-1.0, 0.0)
+    result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+    assert result.scored_by == "right"
+    assert result.score_reason == "goal"

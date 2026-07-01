@@ -24,7 +24,7 @@ class HeuristicOpponent:
         puck_vx = observation[10]
 
         if puck_x < 0.05 or puck_vx < -0.05:
-            target_x = np.clip(puck_x - 0.16, -0.82, -0.08)
+            target_x = np.clip(puck_x - 0.16, -0.68, -0.08)
             target_y = puck_y
         else:
             target_x = -0.55
@@ -47,13 +47,13 @@ class StrikerOpponent:
 
         danger = puck_x < -0.55 and abs(puck_y) < 0.72
         if danger and puck_vx < 0.0:
-            target_x = np.clip(puck_x - 0.10, -0.88, -0.18)
+            target_x = np.clip(puck_x - 0.10, -0.68, -0.18)
             target_y = np.clip(puck_y, -0.78, 0.78)
         elif puck_x > 0.0:
             target_x = -0.08
             target_y = np.clip(puck_y, -0.82, 0.82)
         else:
-            target_x = np.clip(puck_x - 0.14, -0.88, -0.08)
+            target_x = np.clip(puck_x - 0.14, -0.68, -0.08)
             target_y = np.clip(puck_y, -0.82, 0.82)
 
         action = np.array([target_x - own_x, target_y - own_y], dtype=np.float32)

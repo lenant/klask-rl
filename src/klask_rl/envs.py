@@ -274,6 +274,8 @@ class KlaskParallelEnv(ParallelEnv):
         for index, magnet_body in enumerate(self.physics.magnet_bodies):
             if self.physics.magnet_attached_to[index] is not None:
                 continue
+            if self.physics.magnet_in_hole[index]:
+                continue
             distance = (magnet_body.position - handle_position).length
             if distance >= cfg.magnet_attraction_range:
                 continue
