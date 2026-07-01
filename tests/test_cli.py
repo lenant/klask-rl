@@ -50,6 +50,14 @@ def test_play_help_exposes_reward_profile() -> None:
     assert "--reward-profile" in result.output
 
 
+def test_play_help_exposes_scripted_opponent() -> None:
+    result = CliRunner().invoke(play_app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "--opponent" in result.output
+    assert "--model" in result.output
+
+
 def test_watch_help_exposes_reward_profile() -> None:
     result = CliRunner().invoke(watch_app, ["--help"])
 

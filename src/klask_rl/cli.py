@@ -551,7 +551,7 @@ def _human_action_to_canonical(human_side: str, world_action: np.ndarray) -> np.
 
 
 def run_play(
-    model_path: Path,
+    model_path: Path | None,
     human_side: str,
     episodes: int,
     seed: int,
@@ -559,13 +559,28 @@ def run_play(
     deterministic: bool,
     action_scale: float,
     reward_profile: str,
+    opponent: str = "striker",
 ) -> None:
     if human_side not in AGENTS:
         raise typer.BadParameter("human-side must be one of: left, right")
 
     import pygame
 
-    model = PPO.load(model_path, device="cpu")
+    if model_path is not None:
+        model = PPO.load(model_path, device="cpu")
+        opponent_label = str(model_path)
+
+        def opponent_action(observation: np.ndarray) -> np.ndarray:
+            action, _ = model.predict(observation, deterministic=deterministic)
+            return np.asarray(action, dtype=np.float32)
+
+    else:
+        policy = make_named_opponent(opponent, seed=seed + 1000)
+        opponent_label = opponent
+
+        def opponent_action(observation: np.ndarray) -> np.ndarray:
+            return policy.act(observation)
+
     arena_config = ArenaConfig()
     if max_steps is not None:
         arena_config = replace(arena_config, max_steps=max_steps)
@@ -575,6 +590,7 @@ def run_play(
         {
             "human_side": human_side,
             "model_side": model_side,
+            "opponent": opponent_label,
             "reward_profile": reward_profile,
             "controls": "WASD",
             "pause": "space",
@@ -608,10 +624,9 @@ def run_play(
                     human_side,
                     _human_world_action_from_keys(pygame, keys, action_scale),
                 )
-                model_action, _ = model.predict(observations[model_side], deterministic=deterministic)
                 actions = {
                     human_side: human_action,
-                    model_side: np.asarray(model_action, dtype=np.float32),
+                    model_side: opponent_action(observations[model_side]),
                 }
                 observations, _, terminations, truncations, infos = env.step(actions)
                 final_info = infos.get(human_side, final_info)
@@ -788,7 +803,13 @@ def benchmark_entry(
 
 @play_app.callback(invoke_without_command=True)
 def play_entry(
-    model: Annotated[Path, typer.Option(help="Path to a PPO .zip model.")],
+    model: Annotated[
+        Path | None, typer.Option(help="Path to a PPO .zip model. Omit to play a scripted opponent.")
+    ] = None,
+    opponent: Annotated[
+        str,
+        typer.Option(help="Scripted opponent when no model is supplied: heuristic, random, passive, striker."),
+    ] = "striker",
     human_side: Annotated[
         str, typer.Option(help="Side controlled by WASD: left or right.")
     ] = "left",
@@ -803,7 +824,17 @@ def play_entry(
         str, typer.Option(help=f"Reward profile: {', '.join(sorted(REWARD_PROFILES))}.")
     ] = "simple",
 ) -> None:
-    run_play(model, human_side, episodes, seed, max_steps, deterministic, action_scale, reward_profile)
+    run_play(
+        model,
+        human_side,
+        episodes,
+        seed,
+        max_steps,
+        deterministic,
+        action_scale,
+        reward_profile,
+        opponent,
+    )
 
 
 @app.command()
@@ -913,7 +944,8 @@ def benchmark(
 
 @app.command()
 def play(
-    model: Path,
+    model: Path | None = None,
+    opponent: str = "striker",
     human_side: str = "left",
     episodes: int = 5,
     seed: int = 17,
@@ -922,7 +954,17 @@ def play(
     action_scale: float = 1.0,
     reward_profile: str = "simple",
 ) -> None:
-    run_play(model, human_side, episodes, seed, max_steps, deterministic, action_scale, reward_profile)
+    run_play(
+        model,
+        human_side,
+        episodes,
+        seed,
+        max_steps,
+        deterministic,
+        action_scale,
+        reward_profile,
+        opponent,
+    )
 
 
 def main() -> None:
