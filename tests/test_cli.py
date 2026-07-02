@@ -74,6 +74,14 @@ def test_train_help_exposes_policy_net_arch() -> None:
     assert "--resume-opponent-checkpoints" in result.output
 
 
+def test_train_help_exposes_curriculum_and_entropy_options() -> None:
+    result = CliRunner().invoke(train_app, ["--help"])
+
+    assert result.exit_code == 0
+    assert "--goal-radius" in result.output
+    assert "--ent-coef" in result.output
+
+
 def test_parse_policy_net_arch_accepts_commas_and_x() -> None:
     assert parse_policy_net_arch("256,256,256") == (256, 256, 256)
     assert parse_policy_net_arch("256x256x256") == (256, 256, 256)

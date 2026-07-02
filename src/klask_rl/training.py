@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import torch
 from stable_baselines3 import PPO
 
+from klask_rl.config import ArenaConfig
 from klask_rl.envs import SelfPlayKlaskEnv
 from klask_rl.opponents import OpponentPolicy, PassiveOpponent, RandomOpponent, StrikerOpponent
 
@@ -24,6 +25,7 @@ def collect_expert_transitions(
     max_steps: int | None,
     reward_profile: str,
     expert: OpponentPolicy | None = None,
+    goal_radius: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Collect canonical observations and expert actions for warm-start training."""
 
@@ -36,8 +38,12 @@ def collect_expert_transitions(
     ]
     observations: list[np.ndarray] = []
     actions: list[np.ndarray] = []
+    arena_config = (
+        replace(ArenaConfig(), goal_radius=goal_radius) if goal_radius is not None else None
+    )
     env = SelfPlayKlaskEnv(
         opponent=opponents[0],
+        arena_config=arena_config,
         randomize_side=True,
         max_steps=max_steps,
         reward_profile=reward_profile,
@@ -64,6 +70,7 @@ def pretrain_policy_with_behavior_cloning(
     seed: int,
     max_steps: int | None,
     reward_profile: str,
+    goal_radius: float | None = None,
 ) -> BehaviorCloningStats:
     if samples <= 0 or epochs <= 0:
         return BehaviorCloningStats(samples=0, epochs=0, final_loss=0.0)
@@ -73,6 +80,7 @@ def pretrain_policy_with_behavior_cloning(
         seed=seed,
         max_steps=max_steps,
         reward_profile=reward_profile,
+        goal_radius=goal_radius,
     )
     device = model.policy.device
     optimizer = model.policy.optimizer

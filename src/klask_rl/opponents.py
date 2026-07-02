@@ -91,12 +91,17 @@ class SB3CheckpointOpponent:
 
 
 class OpponentPool:
-    """Sample heuristic and frozen checkpoint opponents for league-style self-play."""
+    """Sample heuristic and frozen checkpoint opponents for league-style self-play.
+
+    One opponent is sampled per episode (via ``resample``) so the opponent plays a
+    coherent policy within an episode instead of a per-step mixture.
+    """
 
     def __init__(self, opponents: list[OpponentPolicy] | None = None, seed: int | None = None) -> None:
         self._opponents: list[OpponentPolicy] = opponents or [HeuristicOpponent()]
         self._checkpoint_paths: list[Path] = []
         self._rng = random.Random(seed)
+        self._current: OpponentPolicy = self._opponents[0]
 
     @property
     def checkpoint_paths(self) -> tuple[Path, ...]:
@@ -108,5 +113,8 @@ class OpponentPool:
             self._checkpoint_paths.append(checkpoint)
             self._opponents.append(SB3CheckpointOpponent(checkpoint))
 
+    def resample(self) -> None:
+        self._current = self._rng.choice(self._opponents)
+
     def act(self, observation: np.ndarray) -> np.ndarray:
-        return self._rng.choice(self._opponents).act(observation)
+        return self._current.act(observation)

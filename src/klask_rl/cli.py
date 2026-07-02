@@ -190,12 +190,17 @@ def build_vec_env(
     max_steps: int | None,
     reward_profile: str,
     vec_env: str,
+    goal_radius: float | None = None,
 ) -> VecEnv:
     def make_env(rank: int):
         def _factory():
             pool = make_training_pool(seed + rank)
+            arena_config = (
+                replace(ArenaConfig(), goal_radius=goal_radius) if goal_radius is not None else None
+            )
             env = SelfPlayKlaskEnv(
                 opponent=pool,
+                arena_config=arena_config,
                 max_steps=max_steps,
                 reward_profile=reward_profile,
             )
@@ -245,6 +250,8 @@ def run_train(
     policy_net_arch: str,
     resume_from: Path | None,
     resume_opponent_checkpoints: int,
+    goal_radius: float | None = None,
+    ent_coef: float | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     latest_dir = output_dir / "latest"
@@ -258,11 +265,13 @@ def run_train(
         max_steps=max_steps,
         reward_profile=reward_profile,
         vec_env=vec_env,
+        goal_radius=goal_radius,
     )
     if resume_from is not None:
         if not resume_from.exists():
             raise FileNotFoundError(f"resume checkpoint not found: {resume_from}")
-        model = PPO.load(resume_from, env=env, device=device)
+        load_overrides = {} if ent_coef is None else {"ent_coef": ent_coef}
+        model = PPO.load(resume_from, env=env, device=device, **load_overrides)
         model.verbose = 1
         checkpoint_paths = existing_snapshot_paths(snapshot_dir, max_step=model.num_timesteps)
         if resume_opponent_checkpoints >= 0:
@@ -279,6 +288,8 @@ def run_train(
                 "restored_opponent_checkpoints": len(checkpoint_paths),
                 "resume_opponent_checkpoints": resume_opponent_checkpoints,
                 "next_snapshot_at": initial_last_save + snapshot_freq,
+                "goal_radius": goal_radius,
+                "ent_coef": model.ent_coef,
             }
         )
     else:
@@ -292,6 +303,7 @@ def run_train(
             gamma=0.985,
             gae_lambda=0.95,
             clip_range=0.2,
+            ent_coef=0.0 if ent_coef is None else ent_coef,
             tensorboard_log=str(output_dir / "tensorboard"),
             seed=seed,
             device=device,
@@ -300,7 +312,9 @@ def run_train(
         )
         initial_last_save = 0
         remaining_steps = total_steps
-        console.print({"policy_net_arch": net_arch})
+        console.print(
+            {"policy_net_arch": net_arch, "goal_radius": goal_radius, "ent_coef": model.ent_coef}
+        )
         bc_stats = pretrain_policy_with_behavior_cloning(
             model,
             samples=bc_samples,
@@ -309,6 +323,7 @@ def run_train(
             seed=seed,
             max_steps=max_steps,
             reward_profile=reward_profile,
+            goal_radius=goal_radius,
         )
         if bc_stats.samples:
             console.print(
@@ -693,6 +708,14 @@ def train_entry(
             )
         ),
     ] = 64,
+    goal_radius: Annotated[
+        float | None,
+        typer.Option(help="Override the goal hole radius (board units), e.g. for curriculum stages."),
+    ] = None,
+    ent_coef: Annotated[
+        float | None,
+        typer.Option(help="PPO entropy coefficient. Default: 0.0 fresh, checkpoint value on resume."),
+    ] = None,
 ) -> None:
     run_train(
         total_steps,
@@ -712,6 +735,8 @@ def train_entry(
         policy_net_arch,
         resume_from,
         resume_opponent_checkpoints,
+        goal_radius,
+        ent_coef,
     )
 
 
@@ -856,6 +881,8 @@ def train(
     policy_net_arch: str = "64,64",
     resume_from: Path | None = None,
     resume_opponent_checkpoints: int = 64,
+    goal_radius: float | None = None,
+    ent_coef: float | None = None,
 ) -> None:
     run_train(
         total_steps,
@@ -875,6 +902,8 @@ def train(
         policy_net_arch,
         resume_from,
         resume_opponent_checkpoints,
+        goal_radius,
+        ent_coef,
     )
 
 

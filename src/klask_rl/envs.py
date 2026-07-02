@@ -398,6 +398,9 @@ class SelfPlayKlaskEnv(gym.Env):
     ) -> tuple[np.ndarray, dict[str, Any]]:
         super().reset(seed=seed)
         observations, infos = self.base_env.reset(seed=seed, options=options)
+        resample = getattr(self.opponent, "resample", None)
+        if resample is not None:
+            resample()
         if self.randomize_side:
             self.learning_side = str(self.np_random.choice(AGENTS))
         else:

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 
+from klask_rl.config import ArenaConfig
 from klask_rl.physics import KlaskPhysics
 
 
@@ -27,6 +30,27 @@ def test_puck_rolling_into_own_hole_scores_opponent() -> None:
     physics.handle_bodies["left"].position = (-0.4, 0.4)
     result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
     assert result.scored_by == "right"
+    assert result.score_reason == "goal"
+
+
+def test_goal_radius_override_widens_capture_zone() -> None:
+    offset = 0.12
+
+    physics = KlaskPhysics()
+    physics.reset(seed=1)
+    hole = physics.config.goal_center("right")
+    physics.puck_body.position = (hole[0] - offset, hole[1])
+    physics.puck_body.velocity = (0.0, 0.0)
+    result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+    assert result.scored_by is None
+
+    physics = KlaskPhysics(replace(ArenaConfig(), goal_radius=0.15))
+    physics.reset(seed=1)
+    hole = physics.config.goal_center("right")
+    physics.puck_body.position = (hole[0] - offset, hole[1])
+    physics.puck_body.velocity = (0.0, 0.0)
+    result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+    assert result.scored_by == "left"
     assert result.score_reason == "goal"
 
 
