@@ -150,6 +150,26 @@ REWARD_PROFILES: dict[str, RewardConfig] = {
         time_penalty=0.0,
         action_penalty=0.0,
     ),
+    # simple, rebalanced against the edge-hugging equilibrium: the pull penalty
+    # is weak enough not to dominate, staying near the puck earns more than
+    # hiding, and stalling with the puck on the own side is costly.
+    "simple_v2": RewardConfig(
+        terminal_goal=12.0,
+        progress=0.0,
+        puck_position=0.0,
+        puck_speed=0.0,
+        contact=0.0,
+        puck_distance=0.02,
+        defense=0.0,
+        own_goal_danger=0.0,
+        magnet_attached_penalty=0.0,
+        magnet_proximity_penalty=0.0,
+        magnet_attach_penalty=2.0,
+        magnet_pull_penalty=0.01,
+        own_side_penalty=0.04,
+        time_penalty=0.0,
+        action_penalty=0.0,
+    ),
 }
 
 
