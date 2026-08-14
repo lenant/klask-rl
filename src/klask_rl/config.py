@@ -1,11 +1,22 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
 class ArenaConfig:
+    """Board and physics constants.
+
+    The speed-related values are the original ones put through
+    ``scale_arena_speeds`` at 0.4: a slower board, with control_dt left
+    alone so the policy still decides 30 times a second and therefore
+    steers more finely. Retune with that helper rather than by hand --
+    velocities, accelerations, drag coefficients and step budgets each
+    take a different power of the scale, and moving one alone silently
+    changes how far the puck rolls or how hard a shot lands.
+    """
+
     # Real Klask playing field is 40 x 30 cm; 1 unit = 20 cm.
     width: float = 2.0
     height: float = 1.5
@@ -18,27 +29,27 @@ class ArenaConfig:
     magnet_radius: float = 0.026
     magnet_mass: float = 0.03
     magnet_attraction_range: float = 0.22
-    magnet_attraction_strength: float = 3.0
-    magnet_max_force: float = 0.8
-    max_magnet_speed: float = 1.5
+    magnet_attraction_strength: float = 0.48
+    magnet_max_force: float = 0.128
+    max_magnet_speed: float = 0.6
     magnet_friction: float = 0.75
-    magnet_linear_friction: float = 3.0
-    magnet_slide_friction: float = 1.0
-    magnet_stop_speed: float = 0.02
+    magnet_linear_friction: float = 1.2
+    magnet_slide_friction: float = 0.16
+    magnet_stop_speed: float = 0.008
     magnet_elasticity: float = 0.35
-    magnet_attach_frames: int = 2
+    magnet_attach_frames: int = 5
     magnet_release_distance: float = 0.16
     magnet_score_threshold: int = 2
     puck_start_min_x_fraction: float = 0.125
     puck_start_max_x_fraction: float = 0.25
     puck_mass: float = 0.045
-    max_handle_speed: float = 1.8
+    max_handle_speed: float = 0.72
     # Actions are target velocities, but a hand (or a gantry) cannot change
     # velocity instantly. Bounding the change keeps the handle moving
     # continuously and makes shot power depend on the run-up, instead of every
     # contact landing at full speed.
-    max_handle_acceleration: float = 18.0
-    max_puck_speed: float = 3.2
+    max_handle_acceleration: float = 2.88
+    max_puck_speed: float = 1.28
     physics_dt: float = 1.0 / 120.0
     frame_skip: int = 4
     # Pair restitutions. Shape elasticities multiply in pymunk, so the puck is
@@ -51,9 +62,9 @@ class ArenaConfig:
     # Rolling resistance: a linear (viscous) term plus a constant deceleration.
     # The constant term is what actually brings a slow ball to rest, so the
     # policy sees stationary pucks the way it will on the real board.
-    puck_linear_drag: float = 0.15
-    puck_rolling_friction: float = 0.22
-    puck_stop_speed: float = 0.02
+    puck_linear_drag: float = 0.06
+    puck_rolling_friction: float = 0.0352
+    puck_stop_speed: float = 0.008
     # Handles are confined to their own half, so a puck that stops in the other
     # half is unreachable by everyone and the rest of the episode is dead. Put
     # it back in play after this many motionless control steps, the way a player
@@ -61,10 +72,10 @@ class ArenaConfig:
     # fires ~0.1x per episode -- it is a backstop, not a game mechanic. Kept
     # generous so a clumsy early policy still has to learn to go fetch a
     # resting puck rather than wait the timer out.
-    dead_ball_steps: int = 60
+    dead_ball_steps: int = 150
     # Velocity decay is modelled explicitly per body, so the space adds none.
     damping: float = 1.0
-    max_steps: int = 900
+    max_steps: int = 2250
 
     @property
     def half_width(self) -> float:
@@ -333,6 +344,50 @@ REWARD_PROFILES: dict[str, RewardConfig] = {
         action_penalty=0.0,
     ),
 }
+
+
+def scale_arena_speeds(config: ArenaConfig, scale: float) -> ArenaConfig:
+    """Slow the whole game down by ``scale`` without changing its geometry.
+
+    This is a time dilation, so the constants do not all move together. Under
+    t -> t/scale: velocities take one factor, accelerations and forces take two
+    (length/time squared), a viscous coefficient is a reciprocal time so it
+    takes one, and anything counted in steps lasts longer so it divides.
+
+    ``control_dt`` deliberately stays put. That is the whole point: the board
+    plays out slower while the policy still decides 30 times a second, so it
+    gets finer control -- and the same rally then needs more steps, which is
+    why the step budgets grow.
+    """
+    if scale <= 0.0:
+        raise ValueError(f"speed scale must be positive, got {scale}")
+    squared = scale * scale
+
+    def steps(count: int) -> int:
+        return max(1, round(count / scale))
+
+    return replace(
+        config,
+        # velocities
+        max_handle_speed=config.max_handle_speed * scale,
+        max_puck_speed=config.max_puck_speed * scale,
+        max_magnet_speed=config.max_magnet_speed * scale,
+        puck_stop_speed=config.puck_stop_speed * scale,
+        magnet_stop_speed=config.magnet_stop_speed * scale,
+        # accelerations and forces
+        max_handle_acceleration=config.max_handle_acceleration * squared,
+        puck_rolling_friction=config.puck_rolling_friction * squared,
+        magnet_slide_friction=config.magnet_slide_friction * squared,
+        magnet_attraction_strength=config.magnet_attraction_strength * squared,
+        magnet_max_force=config.magnet_max_force * squared,
+        # reciprocal-time coefficients
+        puck_linear_drag=config.puck_linear_drag * scale,
+        magnet_linear_friction=config.magnet_linear_friction * scale,
+        # durations, counted in steps
+        max_steps=steps(config.max_steps),
+        dead_ball_steps=steps(config.dead_ball_steps),
+        magnet_attach_frames=steps(config.magnet_attach_frames),
+    )
 
 
 def reward_profile(name: str) -> RewardConfig:

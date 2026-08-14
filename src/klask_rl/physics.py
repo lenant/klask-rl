@@ -18,6 +18,11 @@ class PhysicsStepResult:
     served: bool = False
 
 
+# A serve leaves the puck drifting at this fraction of the speed cap. Held as a
+# fraction so it follows a retune of the board speed; as an absolute it silently
+# became a much harder serve every time the game was slowed down.
+SERVE_SPEED_FRACTION = 0.078
+
 RewardOverlay = dict[str, dict[str, Any]]
 
 REWARD_COMPONENT_LABELS: tuple[tuple[str, str], ...] = (
@@ -106,9 +111,10 @@ class KlaskPhysics:
         puck_moment = pymunk.moment_for_circle(cfg.puck_mass, 0.0, cfg.puck_radius)
         self.puck_body = pymunk.Body(cfg.puck_mass, puck_moment)
         self.puck_body.position = self._sample_puck_start_position(rng)
+        jitter = cfg.max_puck_speed * SERVE_SPEED_FRACTION
         self.puck_body.velocity = (
-            rng.uniform(-0.25, 0.25),
-            rng.uniform(-0.25, 0.25),
+            rng.uniform(-jitter, jitter),
+            rng.uniform(-jitter, jitter),
         )
         self.puck_shape = pymunk.Circle(self.puck_body, cfg.puck_radius)
         self.puck_shape.elasticity = cfg.puck_elasticity
@@ -283,9 +289,10 @@ class KlaskPhysics:
                 best_gap = gap
                 best = candidate
         self.puck_body.position = best
+        jitter = cfg.max_puck_speed * SERVE_SPEED_FRACTION
         self.puck_body.velocity = (
-            float(self._rng.uniform(-0.25, 0.25)),
-            float(self._rng.uniform(-0.25, 0.25)),
+            float(self._rng.uniform(-jitter, jitter)),
+            float(self._rng.uniform(-jitter, jitter)),
         )
         self.puck_body.angular_velocity = 0.0
 

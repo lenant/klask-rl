@@ -137,7 +137,10 @@ def test_simple_magnet_attach_penalty_fires_once() -> None:
     env.physics.magnet_bodies[0].velocity = (0.0, 0.0)
 
     actions = {agent: np.zeros(2, dtype=np.float32) for agent in AGENTS}
-    _, _, _, _, infos = env.step(actions)
+    # Attachment needs magnet_attach_frames substeps of contact, which spans
+    # more than one control step.
+    while env.physics.magnet_attached_to[0] is None:
+        _, _, _, _, infos = env.step(actions)
 
     assert env.physics.magnet_attached_to[0] == "left"
     assert infos["left"]["reward_components"]["left"]["magnet_attach"] == pytest.approx(-2.0)
@@ -217,7 +220,10 @@ def test_magnet_scoring_terminates_episode_with_reason() -> None:
     env.physics.magnet_bodies[1].velocity = (0.0, 0.0)
 
     actions = {agent: np.zeros(2, dtype=np.float32) for agent in AGENTS}
-    _, _, terminations, _, infos = env.step(actions)
+    # Both magnets must hold contact for magnet_attach_frames substeps first.
+    terminations = {}
+    while not any(terminations.values()):
+        _, _, terminations, _, infos = env.step(actions)
 
     assert terminations == {"left": True, "right": True}
     assert infos["left"]["score"] == {"left": 0, "right": 1}
