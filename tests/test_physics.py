@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import numpy as np
+import pytest
 
 from klask_rl.config import ArenaConfig
 from klask_rl.physics import KlaskPhysics
@@ -84,6 +85,128 @@ def test_puck_bounces_off_solid_end_wall_at_former_gate_center() -> None:
     assert result.scored_by is None
     assert physics.puck_body.position.x <= cfg.half_width - cfg.puck_radius + 1e-6
     assert physics.puck_body.velocity.x <= 0.0
+
+
+def test_handle_accelerates_instead_of_jumping_to_speed() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=1)
+    cfg = physics.config
+    # Drive along y, which has no half-board clamp to zero the velocity.
+    physics.handle_bodies["left"].position = (-0.5, -0.3)
+    physics.puck_body.position = (0.5, 0.55)
+    physics.puck_body.velocity = (0.0, 0.0)
+
+    forward = np.array([0.0, 1.0])
+    physics.step({"left": forward, "right": np.zeros(2)})
+    first = physics.handle_bodies["left"].velocity.y
+    assert 0.0 < first < cfg.max_handle_speed
+
+    for _ in range(3):
+        physics.step({"left": forward, "right": np.zeros(2)})
+    assert physics.handle_bodies["left"].velocity.y == pytest.approx(cfg.max_handle_speed, abs=1e-6)
+
+    # Reversing has to bleed through zero rather than flipping sign in one step.
+    physics.step({"left": -forward, "right": np.zeros(2)})
+    assert physics.handle_bodies["left"].velocity.y > 0.0
+
+
+def test_handle_slides_along_a_boundary_it_is_pushed_into() -> None:
+    """Only the blocked axis may be cancelled at a bound.
+
+    Zeroing the whole velocity pins the handle: under the acceleration limit it
+    rebuilds a fraction of its speed per substep and loses it again on contact,
+    so holding a diagonal into a wall stops it dead instead of sliding.
+    """
+    cfg = ArenaConfig()
+    diagonal = float(np.sqrt(0.5))
+    for position, action in (
+        ((-cfg.half_width + cfg.handle_radius, 0.0), np.array([-diagonal, diagonal])),
+        ((-cfg.handle_radius, 0.0), np.array([diagonal, diagonal])),
+        ((-0.5, cfg.half_height - cfg.handle_radius), np.array([-diagonal, diagonal])),
+    ):
+        physics = KlaskPhysics(cfg)
+        physics.reset(seed=1)
+        physics.puck_body.position = (0.5, -0.5)
+        physics.puck_body.velocity = (0.0, 0.0)
+        for index, body in enumerate(physics.magnet_bodies):
+            body.position = (0.3 + 0.25 * index, 0.6)
+            body.velocity = (0.0, 0.0)
+        physics.handle_bodies["left"].position = position
+        physics.handle_bodies["left"].velocity = (0.0, 0.0)
+
+        start = physics.handle_bodies["left"].position
+        for _ in range(10):
+            physics.step({"left": action, "right": np.zeros(2)})
+        travelled = (physics.handle_bodies["left"].position - start).length
+        assert travelled > 0.2, f"handle stuck at boundary {position}: moved {travelled:.3f}"
+
+
+def test_shot_power_scales_with_run_up() -> None:
+    """Every contact used to be a full-power shot; a short run-up must be softer."""
+
+    def strike(gap: float) -> float:
+        physics = KlaskPhysics()
+        physics.reset(seed=1)
+        cfg = physics.config
+        physics.handle_bodies["right"].position = (0.9, -0.6)
+        for index, body in enumerate(physics.magnet_bodies):
+            body.position = (-0.3 + 0.3 * index, -0.65)
+            body.velocity = (0.0, 0.0)
+        puck_x = -0.3
+        physics.puck_body.position = (puck_x, 0.55)
+        physics.puck_body.velocity = (0.0, 0.0)
+        contact = cfg.puck_radius + cfg.handle_radius
+        physics.handle_bodies["left"].position = (puck_x - contact - gap, 0.55)
+        physics.handle_bodies["left"].velocity = (0.0, 0.0)
+        for _ in range(40):
+            physics.step({"left": np.array([1.0, 0.0]), "right": np.zeros(2)})
+            if physics.puck_body.velocity.length > 1e-6:
+                return physics.puck_body.velocity.length
+        raise AssertionError("handle never reached the puck")
+
+    nudge = strike(0.01)
+    full = strike(0.4)
+    assert nudge < full * 0.6
+    assert full > 2.5
+
+
+def test_puck_loses_speed_bouncing_off_a_wall() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=1)
+    physics.handle_bodies["left"].position = (-0.9, -0.6)
+    physics.handle_bodies["right"].position = (0.9, -0.6)
+    # A lane clear of the goal holes, which sit on y = 0.
+    physics.puck_body.position = (0.0, 0.55)
+    physics.puck_body.velocity = (2.0, 0.0)
+
+    incoming = 2.0
+    for _ in range(200):
+        before = physics.puck_body.velocity.x
+        physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+        after = physics.puck_body.velocity.x
+        if after < 0.0 <= before:
+            assert abs(after) < incoming * 0.7
+            return
+        incoming = abs(after)
+    raise AssertionError("puck never bounced off the end wall")
+
+
+def test_rolling_puck_comes_to_rest() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=1)
+    cfg = physics.config
+    physics.handle_bodies["left"].position = (-0.9, -0.6)
+    physics.handle_bodies["right"].position = (0.9, -0.6)
+    physics.puck_body.position = (0.0, 0.55)
+    physics.puck_body.velocity = (0.4, 0.0)
+
+    speeds = []
+    for _ in range(int(6.0 / cfg.control_dt)):
+        physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+        speeds.append(physics.puck_body.velocity.length)
+
+    assert speeds[0] < 0.4
+    assert speeds[-1] == 0.0
 
 
 def test_handle_is_clamped_to_own_half() -> None:

@@ -101,7 +101,7 @@ class KlaskPhysics:
             rng.uniform(-0.25, 0.25),
         )
         self.puck_shape = pymunk.Circle(self.puck_body, cfg.puck_radius)
-        self.puck_shape.elasticity = 0.9
+        self.puck_shape.elasticity = cfg.puck_elasticity
         self.puck_shape.friction = cfg.puck_friction
         self.space.add(self.puck_body, self.puck_shape)
 
@@ -147,7 +147,7 @@ class KlaskPhysics:
         for start, end in wall_segments:
             shape = pymunk.Segment(static, start, end, cfg.wall_radius)
             shape.elasticity = cfg.wall_elasticity
-            shape.friction = 0.6
+            shape.friction = cfg.wall_friction
             self.space.add(shape)
 
     def _add_handle(self, agent: str, position: tuple[float, float]) -> None:
@@ -185,15 +185,17 @@ class KlaskPhysics:
 
     def step(self, world_actions: dict[str, np.ndarray]) -> PhysicsStepResult:
         cfg = self.config
+        target_velocities: dict[str, pymunk.Vec2d] = {}
         for agent in AGENTS:
             action = np.asarray(world_actions.get(agent, np.zeros(2)), dtype=np.float64)
             action = np.clip(action, -1.0, 1.0)
-            self.handle_bodies[agent].velocity = tuple(action * cfg.max_handle_speed)
+            target_velocities[agent] = pymunk.Vec2d(*(action * cfg.max_handle_speed))
 
         scored_by: str | None = None
         score_reason: str | None = None
         contacts = {agent: False for agent in AGENTS}
         for _ in range(cfg.frame_skip):
+            self._steer_handles(target_velocities)
             self._apply_magnet_forces()
             self._pin_attached_magnets()
             self.space.step(cfg.physics_dt)
@@ -214,6 +216,7 @@ class KlaskPhysics:
             if scored_by is not None:
                 score_reason = "magnets"
                 break
+            self._apply_puck_friction()
             self._apply_magnet_friction()
             self._limit_puck_speed()
             self._limit_magnet_speeds()
@@ -297,22 +300,23 @@ class KlaskPhysics:
             vy = body.velocity.y
             changed = False
 
+            restitution = cfg.magnet_wall_elasticity
             if x > x_max:
                 x = x_max
-                vx = -abs(vx) * cfg.magnet_elasticity
+                vx = -abs(vx) * restitution
                 changed = True
             elif x < x_min:
                 x = x_min
-                vx = abs(vx) * cfg.magnet_elasticity
+                vx = abs(vx) * restitution
                 changed = True
 
             if y > y_max:
                 y = y_max
-                vy = -abs(vy) * cfg.magnet_elasticity
+                vy = -abs(vy) * restitution
                 changed = True
             elif y < y_min:
                 y = y_min
-                vy = abs(vy) * cfg.magnet_elasticity
+                vy = abs(vy) * restitution
                 changed = True
 
             if changed:
@@ -474,12 +478,37 @@ class KlaskPhysics:
 
         return max(candidates, key=lambda candidate: (candidate - puck_position).length)
 
+    def _steer_handles(self, target_velocities: dict[str, pymunk.Vec2d]) -> None:
+        """Ease each handle toward its commanded velocity within the accel limit."""
+        cfg = self.config
+        max_change = cfg.max_handle_acceleration * cfg.physics_dt
+        for agent, target in target_velocities.items():
+            body = self.handle_bodies[agent]
+            change = target - body.velocity
+            magnitude = change.length
+            if magnitude > max_change:
+                change = change * (max_change / magnitude)
+            body.velocity = body.velocity + change
+
     def _clamp_handles(self) -> None:
+        """Stop a handle at its bounds, killing only the velocity into the bound.
+
+        Zeroing the whole vector would pin the handle in place while it is held
+        against a wall: under the acceleration limit it can only rebuild a
+        fraction of its speed per substep, and it loses that again the moment it
+        touches the bound. Cancelling one axis lets it slide along the wall.
+        """
         for agent, body in self.handle_bodies.items():
             clamped = self._clamped_handle_position(agent, body.position)
-            if clamped.x != body.position.x or clamped.y != body.position.y:
-                body.position = clamped
-                body.velocity = (0.0, 0.0)
+            blocked_x = clamped.x != body.position.x
+            blocked_y = clamped.y != body.position.y
+            if not blocked_x and not blocked_y:
+                continue
+            body.position = clamped
+            body.velocity = (
+                0.0 if blocked_x else body.velocity.x,
+                0.0 if blocked_y else body.velocity.y,
+            )
 
     def _contain_puck(self) -> None:
         cfg = self.config
@@ -494,22 +523,23 @@ class KlaskPhysics:
         y_max = cfg.half_height - cfg.puck_radius
         changed = False
 
+        restitution = cfg.puck_wall_elasticity
         if x > x_max:
             x = x_max
-            vx = -abs(vx) * cfg.wall_elasticity
+            vx = -abs(vx) * restitution
             changed = True
         elif x < x_min:
             x = x_min
-            vx = abs(vx) * cfg.wall_elasticity
+            vx = abs(vx) * restitution
             changed = True
 
         if y > y_max:
             y = y_max
-            vy = -abs(vy) * cfg.wall_elasticity
+            vy = -abs(vy) * restitution
             changed = True
         elif y < y_min:
             y = y_min
-            vy = abs(vy) * cfg.wall_elasticity
+            vy = abs(vy) * restitution
             changed = True
 
         if changed:
@@ -563,13 +593,47 @@ class KlaskPhysics:
             if speed > max_speed:
                 body.velocity = body.velocity * (max_speed / speed)
 
+    def _decelerate(self, body: pymunk.Body, linear: float, constant: float, stop_speed: float) -> None:
+        """Bleed speed off a free body: viscous drag plus a constant deceleration.
+
+        The viscous term dominates at high speed, the constant term is what
+        makes a slow body actually come to rest instead of creeping forever.
+        """
+        multiplier = max(0.0, 1.0 - linear * self.config.physics_dt)
+        velocity = body.velocity
+        speed = velocity.length
+        if speed <= stop_speed:
+            body.velocity = (0.0, 0.0)
+            body.angular_velocity = 0.0
+            return
+        speed_after = speed * multiplier - constant * self.config.physics_dt
+        if speed_after <= stop_speed:
+            body.velocity = (0.0, 0.0)
+            body.angular_velocity = 0.0
+            return
+        body.velocity = velocity * (speed_after / speed)
+        body.angular_velocity *= multiplier
+
+    def _apply_puck_friction(self) -> None:
+        cfg = self.config
+        self._decelerate(
+            self.puck_body,
+            linear=cfg.puck_linear_drag,
+            constant=cfg.puck_rolling_friction,
+            stop_speed=cfg.puck_stop_speed,
+        )
+
     def _apply_magnet_friction(self) -> None:
-        multiplier = max(0.0, 1.0 - self.config.magnet_linear_friction * self.config.physics_dt)
+        cfg = self.config
         for index, body in enumerate(self.magnet_bodies):
             if self.magnet_attached_to[index] is not None or self.magnet_in_hole[index]:
                 continue
-            body.velocity = body.velocity * multiplier
-            body.angular_velocity *= multiplier
+            self._decelerate(
+                body,
+                linear=cfg.magnet_linear_friction,
+                constant=cfg.magnet_slide_friction,
+                stop_speed=cfg.magnet_stop_speed,
+            )
 
     def _is_touching(self, agent: str) -> bool:
         cfg = self.config

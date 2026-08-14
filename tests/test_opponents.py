@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import numpy as np
 
-from klask_rl.envs import SelfPlayKlaskEnv
-from klask_rl.opponents import OpponentPool, PassiveOpponent
+from klask_rl.config import AGENTS
+from klask_rl.envs import KlaskParallelEnv, SelfPlayKlaskEnv
+from klask_rl.opponents import HeuristicOpponent, OpponentPool, PassiveOpponent, StrikerOpponent
 
 
 class _ConstantOpponent:
@@ -13,6 +14,66 @@ class _ConstantOpponent:
     def act(self, observation: np.ndarray) -> np.ndarray:
         del observation
         return np.full(2, self.value, dtype=np.float32)
+
+
+def test_scripted_experts_attack_a_resting_puck() -> None:
+    """A puck that has come to rest must still get hit, not stared at.
+
+    The experts wind up at a standoff behind the puck; without a commit step
+    they park there forever once the puck stops moving on its own.
+    """
+    for expert in (StrikerOpponent(), HeuristicOpponent()):
+        env = KlaskParallelEnv(reward_profile="simple")
+        observations, _ = env.reset(seed=4)
+        env.physics.puck_body.position = (-0.2, 0.1)
+        env.physics.puck_body.velocity = (0.0, 0.0)
+        observations = {agent: env._make_observation(agent) for agent in AGENTS}
+
+        struck = False
+        for _ in range(120):
+            actions = {agent: expert.act(observations[agent]) for agent in env.agents}
+            observations, _, terminations, truncations, _ = env.step(actions)
+            if env.physics.puck_body.velocity.length > 0.5:
+                struck = True
+                break
+            if any(terminations.values()) or any(truncations.values()):
+                break
+        assert struck, f"{type(expert).__name__} never struck the resting puck"
+        env.close()
+
+
+def test_scripted_experts_keep_working_a_puck_on_their_back_wall() -> None:
+    """A puck pinned on the back wall leaves no room to get behind it.
+
+    Driving straight at it only presses it into the boards, so the expert works
+    it from the side. It will not always free it from a corner, but it has to
+    keep the ball alive rather than settle into a standoff and let the rest of
+    the episode run out with a dead puck.
+    """
+    for expert in (StrikerOpponent(), HeuristicOpponent()):
+        env = KlaskParallelEnv(reward_profile="simple")
+        env.reset(seed=5)
+        env.physics.puck_body.position = (-0.94, -0.60)
+        env.physics.puck_body.velocity = (0.0, 0.0)
+        env.physics.handle_bodies["left"].position = (-0.6, -0.3)
+        observations = {agent: env._make_observation(agent) for agent in AGENTS}
+
+        strikes = 0
+        motionless = 0
+        longest_motionless = 0
+        for _ in range(300):
+            actions = {agent: expert.act(observations[agent]) for agent in env.agents}
+            observations, _, terminations, truncations, _ = env.step(actions)
+            speed = env.physics.puck_body.velocity.length
+            strikes += speed > 0.5
+            motionless = motionless + 1 if speed == 0.0 else 0
+            longest_motionless = max(longest_motionless, motionless)
+            if any(terminations.values()) or any(truncations.values()):
+                break
+        name = type(expert).__name__
+        assert strikes > 10, f"{name} barely touched the puck on the back wall"
+        assert longest_motionless < 60, f"{name} let the puck sit dead for {longest_motionless} steps"
+        env.close()
 
 
 def test_pool_acts_coherently_between_resamples() -> None:
