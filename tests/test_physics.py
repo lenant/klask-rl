@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import numpy as np
+import pymunk
 import pytest
 
 from klask_rl.config import ArenaConfig
@@ -85,6 +86,49 @@ def test_puck_bounces_off_solid_end_wall_at_former_gate_center() -> None:
     assert result.scored_by is None
     assert physics.puck_body.position.x <= cfg.half_width - cfg.puck_radius + 1e-6
     assert physics.puck_body.velocity.x <= 0.0
+
+
+def test_stuck_puck_is_served_back_into_play() -> None:
+    """A puck at rest in the far half is unreachable: handles cannot cross."""
+    physics = KlaskPhysics()
+    physics.reset(seed=1)
+    cfg = physics.config
+    stuck = (0.85, 0.6)
+    physics.puck_body.position = stuck
+    physics.puck_body.velocity = (0.0, 0.0)
+    physics.handle_bodies["left"].position = (-0.5, 0.0)
+    physics.handle_bodies["right"].position = (0.5, -0.6)
+
+    for _ in range(cfg.dead_ball_steps - 1):
+        result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+        assert not result.served
+    assert np.allclose(np.array(physics.puck_body.position), np.array(stuck))
+
+    result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+    assert result.served
+    assert physics.serves == 1
+    assert (physics.puck_body.position - pymunk.Vec2d(*stuck)).length > 0.1
+    assert physics.puck_body.velocity.length > 0.0
+    for body in physics.handle_bodies.values():
+        separation = (body.position - physics.puck_body.position).length
+        assert separation > cfg.puck_radius + cfg.handle_radius
+
+
+def test_moving_puck_is_never_served() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=2)
+    physics.puck_body.position = (0.0, 0.55)
+    physics.puck_body.velocity = (0.9, 0.0)
+    physics.handle_bodies["left"].position = (-0.9, -0.6)
+    physics.handle_bodies["right"].position = (0.9, -0.6)
+
+    for _ in range(physics.config.dead_ball_steps + 20):
+        result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+        if result.scored_by is not None:
+            break
+        if physics.puck_body.velocity.length == 0.0:
+            break
+        assert not result.served
 
 
 def test_handle_accelerates_instead_of_jumping_to_speed() -> None:

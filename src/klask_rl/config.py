@@ -54,6 +54,14 @@ class ArenaConfig:
     puck_linear_drag: float = 0.15
     puck_rolling_friction: float = 0.22
     puck_stop_speed: float = 0.02
+    # Handles are confined to their own half, so a puck that stops in the other
+    # half is unreachable by everyone and the rest of the episode is dead. Put
+    # it back in play after this many motionless control steps, the way a player
+    # would re-serve a stuck ball. 0 disables. Against a real opponent this
+    # fires ~0.1x per episode -- it is a backstop, not a game mechanic. Kept
+    # generous so a clumsy early policy still has to learn to go fetch a
+    # resting puck rather than wait the timer out.
+    dead_ball_steps: int = 60
     # Velocity decay is modelled explicitly per body, so the space adds none.
     damping: float = 1.0
     max_steps: int = 900

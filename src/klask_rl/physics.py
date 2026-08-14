@@ -15,6 +15,7 @@ class PhysicsStepResult:
     contacts: dict[str, bool]
     score_reason: str | None
     magnet_counts: dict[str, int]
+    served: bool = False
 
 
 RewardOverlay = dict[str, dict[str, Any]]
@@ -59,6 +60,9 @@ class KlaskPhysics:
         self.magnet_in_hole: list[bool] = []
         self._magnet_attached_offsets: list[pymunk.Vec2d] = []
         self._magnet_contact_frames: list[dict[str, int]] = []
+        self._rng: np.random.Generator = np.random.default_rng()
+        self._motionless_steps = 0
+        self.serves = 0
         self.paused = False
         self.quit_requested = False
         self._screen: Any | None = None
@@ -75,6 +79,9 @@ class KlaskPhysics:
 
     def reset(self, seed: int | None = None) -> None:
         rng = np.random.default_rng(seed)
+        self._rng = rng
+        self._motionless_steps = 0
+        self.serves = 0
         cfg = self.config
         self.space = pymunk.Space()
         self.space.gravity = (0.0, 0.0)
@@ -223,12 +230,61 @@ class KlaskPhysics:
             for agent in AGENTS:
                 contacts[agent] = contacts[agent] or self._is_touching(agent)
 
+        served = False
+        if scored_by is None:
+            served = self._maybe_serve_stuck_puck()
+
         return PhysicsStepResult(
             scored_by=scored_by,
             contacts=contacts,
             score_reason=score_reason,
             magnet_counts=self.magnet_attachment_counts(),
+            served=served,
         )
+
+    def _maybe_serve_stuck_puck(self) -> bool:
+        """Re-serve a puck that has sat still long enough to be unreachable."""
+        cfg = self.config
+        if cfg.dead_ball_steps <= 0:
+            return False
+        if self.puck_body.velocity.length > 0.0:
+            self._motionless_steps = 0
+            return False
+        self._motionless_steps += 1
+        if self._motionless_steps < cfg.dead_ball_steps:
+            return False
+        self._serve_puck()
+        self._motionless_steps = 0
+        self.serves += 1
+        return True
+
+    def _serve_puck(self) -> None:
+        """Drop the puck back into open play, clear of the handles and magnets."""
+        cfg = self.config
+        obstacles = [body.position for body in self.handle_bodies.values()]
+        obstacles += [
+            body.position
+            for index, body in enumerate(self.magnet_bodies)
+            if not self.magnet_in_hole[index]
+        ]
+        clearance = cfg.puck_radius + cfg.handle_radius + 0.03
+        best = pymunk.Vec2d(*self._sample_puck_start_position(self._rng))
+        best_gap = -1.0
+        for _ in range(32):
+            candidate = pymunk.Vec2d(*self._sample_puck_start_position(self._rng))
+            gap = min(((candidate - other).length for other in obstacles), default=float("inf"))
+            if gap >= clearance:
+                best = candidate
+                break
+            if gap > best_gap:
+                best_gap = gap
+                best = candidate
+        self.puck_body.position = best
+        self.puck_body.velocity = (
+            float(self._rng.uniform(-0.25, 0.25)),
+            float(self._rng.uniform(-0.25, 0.25)),
+        )
+        self.puck_body.angular_velocity = 0.0
 
     def _magnet_attraction_force(self, distance: float) -> float:
         cfg = self.config
