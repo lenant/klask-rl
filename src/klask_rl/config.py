@@ -206,6 +206,35 @@ REWARD_PROFILES: dict[str, RewardConfig] = {
         time_penalty=0.0,
         action_penalty=0.0,
     ),
+    # simple_v2 rebalanced for a puck that can come to rest. own_side is a
+    # one-sided tax, so with a ball that stays where it stops the best play
+    # became "knock it into their half and abandon it": both agents park, the
+    # ball is never played, episodes run to the cap, and own_side (-18.5/ep
+    # measured) swamps terminal_goal (+12). Cut it to a nudge. puck_distance
+    # carries the load instead -- it is differenced, so being nearer the puck
+    # than the opponent pays, which is what breaks a mutual-ignore standoff.
+    "simple_v3": RewardConfig(
+        terminal_goal=12.0,
+        progress=0.0,
+        puck_position=0.0,
+        puck_speed=0.0,
+        contact=0.0,
+        puck_distance=0.05,
+        defense=0.0,
+        own_goal_danger=0.0,
+        magnet_attached_penalty=0.0,
+        magnet_proximity_penalty=0.0,
+        magnet_attach_penalty=2.0,
+        magnet_pull_penalty=0.01,
+        own_side_penalty=0.005,
+        # NOTE: time_penalty is inert. Every component except own_side is
+        # differenced against the opponent's, and both agents get the same
+        # time term, so it cancels to exactly zero. Making it one-sided would
+        # give a real anti-stall lever, but it silently changes the four
+        # legacy profiles, so it is left alone deliberately.
+        time_penalty=0.0,
+        action_penalty=0.0,
+    ),
 }
 
 
