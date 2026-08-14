@@ -45,6 +45,10 @@ class ArenaConfig:
     # had got past the agent was a state it never saw and had no answer to.
     puck_start_margin: float = 0.02
     puck_start_hole_clearance: float = 0.11
+    # Handles start anywhere in their own half, far enough from their own hole
+    # not to klask off the serve. They used to start at a near-fixed spot, so
+    # every episode opened from the same shape.
+    handle_start_hole_clearance: float = 0.13
     puck_mass: float = 0.045
     max_handle_speed: float = 0.72
     # Actions are target velocities, but a hand (or a gantry) cannot change

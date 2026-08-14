@@ -152,15 +152,37 @@ class KlaskPhysics:
         return (0.0, float(rng.uniform(-y_limit, y_limit)))
 
     def _sample_handle_start_position(self, agent: str, rng: np.random.Generator) -> tuple[float, float]:
+        """Place a handle anywhere in its own half, clear of its hole and the puck.
+
+        Handles used to start at a near-fixed spot, so every episode opened
+        from the same shape and the agent never had to work out what to do
+        from an awkward starting position.
+        """
         cfg = self.config
-        preferred_x = -0.55 if agent == "left" else 0.55
-        preferred = pymunk.Vec2d(preferred_x, rng.uniform(-0.08, 0.08))
+        x_min, x_max, y_min, y_max = self._handle_bounds(agent)
+        hole = pymunk.Vec2d(*cfg.goal_center(agent))
+        puck_position = self.puck_body.position
+        min_distance = cfg.puck_radius + cfg.handle_radius + 0.02
+
+        for _ in range(64):
+            candidate = pymunk.Vec2d(
+                float(rng.uniform(x_min, x_max)),
+                float(rng.uniform(y_min, y_max)),
+            )
+            if (candidate - hole).length < cfg.handle_start_hole_clearance:
+                continue
+            if (candidate - puck_position).length < min_distance:
+                continue
+            return (candidate.x, candidate.y)
+
+        # Crowded board: fall back to the nearest spot that clears the puck.
+        preferred = pymunk.Vec2d(-0.55 if agent == "left" else 0.55, 0.0)
         safe_position = self._non_overlapping_handle_position(
             agent=agent,
             current_position=preferred,
             preferred_position=preferred,
-            puck_position=self.puck_body.position,
-            min_distance=cfg.puck_radius + cfg.handle_radius + 0.02,
+            puck_position=puck_position,
+            min_distance=min_distance,
         )
         return (safe_position.x, safe_position.y)
 

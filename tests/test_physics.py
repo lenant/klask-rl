@@ -682,3 +682,32 @@ def test_n_key_requests_skipping_the_episode(monkeypatch) -> None:
 
     physics.close()
     assert not physics.skip_requested
+
+
+def test_handles_start_anywhere_in_their_own_half_clear_of_their_hole() -> None:
+    """Fixed starts meant every episode opened from the same shape."""
+    physics = KlaskPhysics()
+    cfg = physics.config
+    min_distance = cfg.puck_radius + cfg.handle_radius
+    spread = {"left": [], "right": []}
+
+    for seed in range(200):
+        physics.reset(seed=seed)
+        puck = physics.puck_body.position
+        for agent in AGENTS:
+            position = physics.handle_bodies[agent].position
+            x_min, x_max, y_min, y_max = physics._handle_bounds(agent)
+            assert x_min <= position.x <= x_max, f"{agent} left its half at {position.x:.3f}"
+            assert y_min <= position.y <= y_max
+            hole = pymunk.Vec2d(*cfg.goal_center(agent))
+            assert (position - hole).length >= cfg.handle_klask_radius, (
+                f"seed {seed}: {agent} started inside its own hole"
+            )
+            assert (position - puck).length >= min_distance
+            spread[agent].append((position.x, position.y))
+
+    for agent, points in spread.items():
+        xs = [x for x, _ in points]
+        ys = [y for _, y in points]
+        assert max(xs) - min(xs) > 0.5, f"{agent} x barely varies"
+        assert max(ys) - min(ys) > 0.5, f"{agent} y barely varies"
