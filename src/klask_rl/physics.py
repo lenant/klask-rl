@@ -738,6 +738,67 @@ class KlaskPhysics:
         inset_y = cfg.half_height - cfg.wall_radius - cfg.puck_radius
         return -inset_x, inset_x, -inset_y, inset_y
 
+    def _stopping_distance(self, speed: float) -> float:
+        """How far the puck still rolls before friction brings it to rest.
+
+        Closed form of dv/dd = -(k*v + a)/v for the drag-plus-constant model in
+        ``_decelerate``.
+        """
+        cfg = self.config
+        drag = cfg.puck_linear_drag
+        rolling = cfg.puck_rolling_friction
+        if speed <= cfg.puck_stop_speed:
+            return 0.0
+        if rolling <= 1e-9:
+            return float("inf")
+        if drag <= 1e-9:
+            return speed * speed / (2.0 * rolling)
+        return speed / drag - (rolling / (drag * drag)) * float(np.log1p(drag * speed / rolling))
+
+    def _speed_after_rolling(self, speed: float, distance: float) -> float:
+        """Speed left after rolling ``distance``. Inverts _stopping_distance."""
+        budget = self._stopping_distance(speed)
+        if not np.isfinite(budget):
+            return speed
+        if distance >= budget:
+            return 0.0
+        target = budget - distance
+        low, high = 0.0, speed
+        for _ in range(16):
+            middle = 0.5 * (low + high)
+            if self._stopping_distance(middle) < target:
+                low = middle
+            else:
+                high = middle
+        return 0.5 * (low + high)
+
+    def _bounce_direction(self, direction: pymunk.Vec2d, axis: str) -> pymunk.Vec2d:
+        """Bounce a heading off a wall the way the simulation actually does.
+
+        A wall is not a mirror. It returns only ``puck_wall_elasticity`` of the
+        normal component and rubs tangential speed off by Coulomb friction, so
+        the outgoing angle is flatter than the incoming one. Reflecting
+        specularly instead makes every leg after the first fictitious -- as
+        measured, a bank shot predicted that way lands barely better than a coin
+        flip.
+        """
+        cfg = self.config
+        restitution = cfg.puck_wall_elasticity
+        friction = cfg.puck_friction * cfg.wall_friction
+        normal, tangent = (
+            (direction.x, direction.y) if axis == "x" else (direction.y, direction.x)
+        )
+        outgoing_normal = -normal * restitution
+        # Coulomb: the tangential impulse is capped by friction times the
+        # normal impulse, which carries the (1 + e) factor.
+        scrub = friction * (1.0 + restitution) * abs(normal)
+        outgoing_tangent = float(np.sign(tangent) * max(0.0, abs(tangent) - scrub))
+        return (
+            pymunk.Vec2d(outgoing_normal, outgoing_tangent)
+            if axis == "x"
+            else pymunk.Vec2d(outgoing_tangent, outgoing_normal)
+        )
+
     def shot_on_target(self, target_side: str, max_reflections: int = 2) -> float:
         """How well the puck's current path leads into ``target_side``'s hole.
 
@@ -808,6 +869,11 @@ class KlaskPhysics:
             if axis is None or not np.isfinite(travel):
                 break
 
+            # The puck only travels as far as its remaining energy allows;
+            # a bank shot that runs out of roll before the hole is not a shot.
+            reach = self._stopping_distance(speed)
+            travel = min(travel, reach)
+
             # Whichever hole the path reaches first is the one it falls into.
             target_entry = entry_distance(position, direction, travel, hole)
             own_entry = entry_distance(position, direction, travel, own_hole)
@@ -820,12 +886,15 @@ class KlaskPhysics:
             along = float(np.clip((hole - position).dot(direction), 0.0, travel))
             closest = min(closest, (position + direction * along - hole).length)
 
+            if travel >= reach:
+                break  # rolls to a stop before reaching another wall
             position = position + direction * travel
-            direction = (
-                pymunk.Vec2d(-direction.x, direction.y)
-                if axis == "x"
-                else pymunk.Vec2d(direction.x, -direction.y)
-            )
+            speed = self._speed_after_rolling(speed, travel)
+            bounced = self._bounce_direction(direction, axis) * speed
+            speed = bounced.length
+            if speed <= cfg.puck_stop_speed:
+                break
+            direction = bounced / speed
 
         if closest <= capture:
             return 1.0

@@ -310,15 +310,19 @@ class KlaskParallelEnv(ParallelEnv):
         # Aim: is this shot pointed at the hole, directly or off the boards?
         # Scaled by puck speed so a decisive strike counts for more than a
         # dribble that happens to be lined up.
-        shot_speed = min(
-            1.0,
-            float(self.physics.puck_body.velocity.length) / self.arena_config.max_puck_speed,
-        )
-        aim = (
-            self.reward_config.aim
-            * self.physics.shot_on_target(OPPONENT[agent], self.reward_config.aim_reflections)
-            * shot_speed
-        )
+        aim = 0.0
+        if self.reward_config.aim:
+            # Only pay for the trajectory march when a profile actually uses it;
+            # it is ~7% of rollout wall-clock and most profiles set aim to 0.
+            shot_speed = min(
+                1.0,
+                float(self.physics.puck_body.velocity.length) / self.arena_config.max_puck_speed,
+            )
+            aim = (
+                self.reward_config.aim
+                * self.physics.shot_on_target(OPPONENT[agent], self.reward_config.aim_reflections)
+                * shot_speed
+            )
         position = self.reward_config.puck_position * puck_x
         speed = self.reward_config.puck_speed * puck_vx
         contact_bonus = self.reward_config.contact if contact else 0.0

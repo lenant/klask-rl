@@ -551,23 +551,56 @@ def test_shot_on_target_scores_a_straight_shot() -> None:
     assert physics.shot_on_target("right") < 1.0
 
 
-def test_shot_on_target_scores_a_bank_shot() -> None:
-    """Banking off a wall is a normal way to score and must count."""
+def _bank_shots(physics: KlaskPhysics, speed: float) -> list[float]:
+    """Angles from the centre that only reach the hole after a bounce."""
+    found = []
+    for degrees in range(0, 360, 2):
+        radians = np.radians(degrees)
+        physics.puck_body.position = (-0.3, 0.0)
+        physics.puck_body.velocity = pymunk.Vec2d(np.cos(radians), np.sin(radians)) * speed
+        if physics.shot_on_target("right", max_reflections=0) < 1.0 and (
+            physics.shot_on_target("right", max_reflections=2) >= 1.0
+        ):
+            found.append(radians)
+    return found
+
+
+def test_shot_on_target_finds_shots_that_only_work_off_a_wall() -> None:
+    """Banking is a normal way to score, so bounces must widen what counts."""
     physics = KlaskPhysics()
     physics.reset(seed=1)
-    cfg = physics.config
-    hole = pymunk.Vec2d(*cfg.goal_center("right"))
-    start = pymunk.Vec2d(-0.4, 0.0)
-    physics.puck_body.position = start
-    # Aim at the top wall so the reflection carries into the hole: mirror the
-    # hole across the wall and shoot at the mirror image.
-    wall_y = cfg.half_height - cfg.wall_radius - cfg.puck_radius
-    mirrored = pymunk.Vec2d(hole.x, 2.0 * wall_y - hole.y)
-    physics.puck_body.velocity = (mirrored - start).normalized() * 2.0
+    assert _bank_shots(physics, physics.config.max_puck_speed), "no bank shots found"
 
-    assert physics.shot_on_target("right", max_reflections=2) == 1.0
-    # With no bounces allowed the same shot must not count.
-    assert physics.shot_on_target("right", max_reflections=0) < 1.0
+
+def test_predicted_bank_shots_mostly_are_goals() -> None:
+    """The predictor earns reward, so its verdicts must track the simulator.
+
+    Guards against the bank branch decaying into noise: it once reflected
+    specularly and ignored friction, which made it barely better than chance.
+    """
+    physics = KlaskPhysics()
+    physics.reset(seed=1)
+    speed = physics.config.max_puck_speed
+    angles = _bank_shots(physics, speed)
+
+    goals = 0
+    for radians in angles:
+        physics.reset(seed=1)
+        physics.handle_bodies["left"].position = (-0.94, -0.70)
+        physics.handle_bodies["right"].position = (0.94, -0.70)
+        for index, body in enumerate(physics.magnet_bodies):
+            body.position = (-0.5 + 0.5 * index, -0.70)
+            body.velocity = (0.0, 0.0)
+        physics.puck_body.position = (-0.3, 0.0)
+        physics.puck_body.velocity = pymunk.Vec2d(np.cos(radians), np.sin(radians)) * speed
+        for _ in range(150):
+            result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+            if result.scored_by is not None:
+                goals += result.score_reason == "goal" and result.scored_by == "left"
+                break
+            if physics.puck_body.velocity.length == 0.0:
+                break
+    assert goals / len(angles) > 0.5, f"only {goals}/{len(angles)} predicted bank shots scored"
 
 
 def test_shot_on_target_is_zero_for_a_resting_puck() -> None:
