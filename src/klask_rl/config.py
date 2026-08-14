@@ -116,6 +116,11 @@ class ArenaConfig:
 class RewardConfig:
     terminal_goal: float = 12.0
     progress: float = 0.6
+    # Reward for a shot whose path leads into the opponent's hole, counting
+    # bank shots off the boards -- scoring off a wall is normal in Klask, and
+    # rewarding only straight-on shots would teach otherwise.
+    aim: float = 0.0
+    aim_reflections: int = 2
     puck_position: float = 0.02
     puck_speed: float = 0.08
     contact: float = 0.08
@@ -232,6 +237,52 @@ REWARD_PROFILES: dict[str, RewardConfig] = {
         # time term, so it cancels to exactly zero. Making it one-sided would
         # give a real anti-stall lever, but it silently changes the four
         # legacy profiles, so it is left alone deliberately.
+        time_penalty=0.0,
+        action_penalty=0.0,
+    ),
+    # Experiment 1. simple_v2 with puck_distance removed. distance rewards
+    # standing next to the puck, which directly opposes own_side's "clear it
+    # off your half" -- and clearing requires striking. With a puck that can
+    # rest, loitering beside it was the better deal (measured 2% strike rate on
+    # resting balls). Dropping distance leaves own_side as a clean strike
+    # incentive.
+    "simple_v4": RewardConfig(
+        terminal_goal=12.0,
+        progress=0.0,
+        puck_position=0.0,
+        puck_speed=0.0,
+        contact=0.0,
+        puck_distance=0.0,
+        defense=0.0,
+        own_goal_danger=0.0,
+        magnet_attached_penalty=0.0,
+        magnet_proximity_penalty=0.0,
+        magnet_attach_penalty=2.0,
+        magnet_pull_penalty=0.01,
+        own_side_penalty=0.04,
+        time_penalty=0.0,
+        action_penalty=0.0,
+    ),
+    # Experiment 2. simple_v4 plus explicit shot shaping: progress for driving
+    # the puck downfield, aim for pointing it at the hole including bank shots.
+    # progress is already speed-scaled (it is a per-step displacement) and aim
+    # is scaled by puck speed, so both pay more for a decisive strike.
+    "simple_v5": RewardConfig(
+        terminal_goal=12.0,
+        progress=0.3,
+        aim=0.15,
+        aim_reflections=2,
+        puck_position=0.0,
+        puck_speed=0.0,
+        contact=0.0,
+        puck_distance=0.0,
+        defense=0.0,
+        own_goal_danger=0.0,
+        magnet_attached_penalty=0.0,
+        magnet_proximity_penalty=0.0,
+        magnet_attach_penalty=2.0,
+        magnet_pull_penalty=0.01,
+        own_side_penalty=0.04,
         time_penalty=0.0,
         action_penalty=0.0,
     ),

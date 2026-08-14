@@ -537,3 +537,72 @@ def test_magnet_in_hole_becomes_inert() -> None:
     result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
     assert result.scored_by == "right"
     assert result.score_reason == "goal"
+
+
+def test_shot_on_target_scores_a_straight_shot() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=1)
+    hole = physics.config.goal_center("right")
+    physics.puck_body.position = (-0.4, hole[1])
+    physics.puck_body.velocity = (2.0, 0.0)
+    assert physics.shot_on_target("right") == 1.0
+    # Same puck, aimed away from the hole.
+    physics.puck_body.velocity = (-2.0, 0.0)
+    assert physics.shot_on_target("right") < 1.0
+
+
+def test_shot_on_target_scores_a_bank_shot() -> None:
+    """Banking off a wall is a normal way to score and must count."""
+    physics = KlaskPhysics()
+    physics.reset(seed=1)
+    cfg = physics.config
+    hole = pymunk.Vec2d(*cfg.goal_center("right"))
+    start = pymunk.Vec2d(-0.4, 0.0)
+    physics.puck_body.position = start
+    # Aim at the top wall so the reflection carries into the hole: mirror the
+    # hole across the wall and shoot at the mirror image.
+    wall_y = cfg.half_height - cfg.wall_radius - cfg.puck_radius
+    mirrored = pymunk.Vec2d(hole.x, 2.0 * wall_y - hole.y)
+    physics.puck_body.velocity = (mirrored - start).normalized() * 2.0
+
+    assert physics.shot_on_target("right", max_reflections=2) == 1.0
+    # With no bounces allowed the same shot must not count.
+    assert physics.shot_on_target("right", max_reflections=0) < 1.0
+
+
+def test_shot_on_target_is_zero_for_a_resting_puck() -> None:
+    physics = KlaskPhysics()
+    physics.reset(seed=1)
+    physics.puck_body.position = physics.config.goal_center("right")
+    physics.puck_body.velocity = (0.0, 0.0)
+    assert physics.shot_on_target("right") == 0.0
+
+
+def test_shot_on_target_predicts_the_real_trajectory() -> None:
+    """The predictor must agree with what the simulation actually does."""
+    physics = KlaskPhysics()
+    physics.reset(seed=3)
+    cfg = physics.config
+    hole = pymunk.Vec2d(*cfg.goal_center("right"))
+    start = pymunk.Vec2d(-0.5, 0.0)
+    wall_y = cfg.half_height - cfg.wall_radius - cfg.puck_radius
+    mirrored = pymunk.Vec2d(hole.x, 2.0 * wall_y - hole.y)
+
+    physics.puck_body.position = start
+    physics.puck_body.velocity = (mirrored - start).normalized() * 3.0
+    physics.handle_bodies["left"].position = (-0.9, -0.6)
+    physics.handle_bodies["right"].position = (0.9, -0.6)
+    for index, body in enumerate(physics.magnet_bodies):
+        body.position = (-0.2 + 0.2 * index, -0.65)
+        body.velocity = (0.0, 0.0)
+
+    assert physics.shot_on_target("right", max_reflections=2) == 1.0
+    scored = None
+    for _ in range(120):
+        result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+        if result.scored_by is not None:
+            scored = result
+            break
+    assert scored is not None, "predicted bank shot never resolved"
+    assert scored.score_reason == "goal"
+    assert scored.scored_by == "left"

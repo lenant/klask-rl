@@ -22,6 +22,7 @@ RewardOverlay = dict[str, dict[str, Any]]
 
 REWARD_COMPONENT_LABELS: tuple[tuple[str, str], ...] = (
     ("progress", "progress"),
+    ("aim", "aim"),
     ("position", "position"),
     ("speed", "speed"),
     ("contact", "contact"),
@@ -729,6 +730,100 @@ class KlaskPhysics:
                 magnet_body.angular_velocity = 0.0
                 self._magnet_contact_frames[index] = {agent: 0 for agent in AGENTS}
                 break
+
+    def _puck_bounce_bounds(self) -> tuple[float, float, float, float]:
+        """Where the puck's centre turns around, i.e. the wall surface offset in."""
+        cfg = self.config
+        inset_x = cfg.half_width - cfg.wall_radius - cfg.puck_radius
+        inset_y = cfg.half_height - cfg.wall_radius - cfg.puck_radius
+        return -inset_x, inset_x, -inset_y, inset_y
+
+    def shot_on_target(self, target_side: str, max_reflections: int = 2) -> float:
+        """How well the puck's current path leads into ``target_side``'s hole.
+
+        Straight-line propagation with specular wall bounces, so this scores the
+        *aim* of a shot rather than its outcome: friction, spin, and anything in
+        the way are ignored. A shot only has to be pointed at the hole to count,
+        which is the point -- banking off a wall is a normal way to score in
+        Klask, and rewarding only straight-on shots would teach otherwise.
+
+        Returns 1.0 for a path that enters the hole, tailing to 0.0 for one that
+        misses by more than a puck width beyond the capture radius.
+        """
+        cfg = self.config
+        velocity = self.puck_body.velocity
+        speed = velocity.length
+        if speed <= 1e-9:
+            return 0.0
+
+        direction = velocity / speed
+        position = self.puck_body.position
+        hole = pymunk.Vec2d(*cfg.goal_center(target_side))
+        # The puck drops into whichever hole it reaches first, so a path that
+        # crosses our own hole on the way is a concession, not a shot.
+        own_hole = pymunk.Vec2d(*cfg.goal_center(OPPONENT[target_side]))
+        x_min, x_max, y_min, y_max = self._puck_bounce_bounds()
+        capture = cfg.puck_capture_radius
+        tail = cfg.puck_radius * 2.0
+        closest = float("inf")
+
+        def entry_distance(origin: pymunk.Vec2d, heading: pymunk.Vec2d, limit: float, centre: pymunk.Vec2d) -> float | None:
+            """How far along this leg the puck first falls into ``centre``."""
+            to_centre = centre - origin
+            along = to_centre.dot(heading)
+            perpendicular_sq = to_centre.length_squared - along * along
+            if perpendicular_sq > capture * capture:
+                return None
+            half_chord = float(np.sqrt(max(0.0, capture * capture - perpendicular_sq)))
+            enter = along - half_chord
+            if along + half_chord < 0.0:
+                return None
+            enter = max(0.0, enter)
+            return enter if enter <= limit else None
+
+        for _ in range(max_reflections + 1):
+            # Distance to the first wall the puck would reach on this heading.
+            travel = float("inf")
+            axis = None
+            for component, low, high, name in (
+                (direction.x, x_min, x_max, "x"),
+                (direction.y, y_min, y_max, "y"),
+            ):
+                origin = position.x if name == "x" else position.y
+                if component > 1e-9:
+                    candidate = (high - origin) / component
+                elif component < -1e-9:
+                    candidate = (low - origin) / component
+                else:
+                    continue
+                if 0.0 <= candidate < travel:
+                    travel = candidate
+                    axis = name
+            if axis is None or not np.isfinite(travel):
+                break
+
+            # Whichever hole the path reaches first is the one it falls into.
+            target_entry = entry_distance(position, direction, travel, hole)
+            own_entry = entry_distance(position, direction, travel, own_hole)
+            if own_entry is not None and (target_entry is None or own_entry < target_entry):
+                return 0.0
+            if target_entry is not None:
+                return 1.0
+
+            # Closest the puck's centre comes to the hole along this leg.
+            along = float(np.clip((hole - position).dot(direction), 0.0, travel))
+            closest = min(closest, (position + direction * along - hole).length)
+
+            position = position + direction * travel
+            direction = (
+                pymunk.Vec2d(-direction.x, direction.y)
+                if axis == "x"
+                else pymunk.Vec2d(direction.x, -direction.y)
+            )
+
+        if closest <= capture:
+            return 1.0
+        return float(max(0.0, 1.0 - (closest - capture) / tail))
 
     def snapshot(self) -> dict[str, np.ndarray]:
         return {

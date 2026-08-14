@@ -16,6 +16,7 @@ from klask_rl.physics import KlaskPhysics
 
 REWARD_COMPONENTS: tuple[str, ...] = (
     "progress",
+    "aim",
     "position",
     "speed",
     "contact",
@@ -299,6 +300,18 @@ class KlaskParallelEnv(ParallelEnv):
         puck_distance = float(np.linalg.norm(obs[12:14]))
 
         progress = self.reward_config.progress * (puck_x - previous_puck_x)
+        # Aim: is this shot pointed at the hole, directly or off the boards?
+        # Scaled by puck speed so a decisive strike counts for more than a
+        # dribble that happens to be lined up.
+        shot_speed = min(
+            1.0,
+            float(self.physics.puck_body.velocity.length) / self.arena_config.max_puck_speed,
+        )
+        aim = (
+            self.reward_config.aim
+            * self.physics.shot_on_target(OPPONENT[agent], self.reward_config.aim_reflections)
+            * shot_speed
+        )
         position = self.reward_config.puck_position * puck_x
         speed = self.reward_config.puck_speed * puck_vx
         contact_bonus = self.reward_config.contact if contact else 0.0
@@ -320,6 +333,7 @@ class KlaskParallelEnv(ParallelEnv):
         own_side = -self.reward_config.own_side_penalty if puck_x < 0.0 else 0.0
         return {
             "progress": progress,
+            "aim": aim,
             "position": position,
             "speed": speed,
             "contact": contact_bonus,
