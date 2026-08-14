@@ -263,6 +263,30 @@ REWARD_PROFILES: dict[str, RewardConfig] = {
         time_penalty=0.0,
         action_penalty=0.0,
     ),
+    # simple_v5 with a single reflection. Depth 2 predicts a bank shot with
+    # 68% accuracy against depth 1's 79%, the marginal second-bounce shots
+    # landing near chance -- and at depth 2 aim did not beat plain progress
+    # (89-70 to progress-only over 200 games, p=0.15). This tests whether the
+    # sharper signal is what the idea needed.
+    "simple_v5_aim1": RewardConfig(
+        terminal_goal=12.0,
+        progress=0.3,
+        aim=0.15,
+        aim_reflections=1,
+        puck_position=0.0,
+        puck_speed=0.0,
+        contact=0.0,
+        puck_distance=0.0,
+        defense=0.0,
+        own_goal_danger=0.0,
+        magnet_attached_penalty=0.0,
+        magnet_proximity_penalty=0.0,
+        magnet_attach_penalty=2.0,
+        magnet_pull_penalty=0.01,
+        own_side_penalty=0.04,
+        time_penalty=0.0,
+        action_penalty=0.0,
+    ),
     # Ablation of simple_v5: progress without aim. simple_v5 beat the previous
     # leader 39-12, but it changed two things at once, so this isolates whether
     # the bank-shot aim term earned its keep or plain "drive it downfield" did
