@@ -238,3 +238,39 @@ def test_klask_terminates_episode_with_reason() -> None:
     assert infos["left"]["score"] == {"left": 0, "right": 1}
     assert infos["left"]["scored_by"] == "right"
     assert infos["left"]["score_reason"] == "klask"
+
+
+def test_reserve_does_not_score_as_progress() -> None:
+    """A re-serve teleports the puck; neither agent did that.
+
+    Left unhandled, progress shaping scores the jump, which at several serves
+    an episode swamps the real signal.
+    """
+    from dataclasses import replace
+
+    from klask_rl.config import ArenaConfig
+
+    env = KlaskParallelEnv(
+        arena_config=replace(ArenaConfig(), dead_ball_steps=1),
+        reward_profile="simple_v5",
+    )
+    env.reset(seed=4)
+    # Park the puck at rest far downfield so a re-serve is a large jump.
+    env.physics.puck_body.position = (0.9, 0.6)
+    env.physics.puck_body.velocity = (0.0, 0.0)
+
+    served = False
+    for _ in range(6):
+        _, _, terminations, truncations, infos = env.step(
+            {agent: np.zeros(2, dtype=np.float32) for agent in env.agents}
+        )
+        components = infos["left"]["reward_components"]["left"]
+        if env.physics.serves and not served:
+            served = True
+            assert abs(float(components["progress"])) < 1e-6, (
+                f"re-serve scored progress {components['progress']}"
+            )
+        if any(terminations.values()) or any(truncations.values()):
+            break
+    assert served, "puck was never re-served"
+    env.close()

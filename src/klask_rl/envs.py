@@ -115,6 +115,13 @@ class KlaskParallelEnv(ParallelEnv):
         previous_magnet_attached_to = list(self.physics.magnet_attached_to)
 
         result = self.physics.step(world_actions)
+        if result.served:
+            # A re-serve teleports the puck across the board. Neither agent did
+            # that, so rebase the baseline: otherwise progress shaping scores
+            # the jump, which swamps the real signal at ~9 serves an episode.
+            previous_puck_x = {
+                agent: float(self._make_observation(agent)[8]) for agent in active_agents
+            }
         self.steps += 1
         if result.scored_by is not None:
             self.scores[result.scored_by] += 1

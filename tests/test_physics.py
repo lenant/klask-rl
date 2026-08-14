@@ -606,3 +606,18 @@ def test_shot_on_target_predicts_the_real_trajectory() -> None:
     assert scored is not None, "predicted bank shot never resolved"
     assert scored.score_reason == "goal"
     assert scored.scored_by == "left"
+
+
+def test_shot_on_target_handles_a_puck_outside_the_bounce_box() -> None:
+    """_contain_puck tolerates the puck past where pymunk resolves a bounce.
+
+    Marching from out there finds no wall ahead and reports a miss, even though
+    the simulator bounces it straight into the hole.
+    """
+    physics = KlaskPhysics()
+    physics.reset(seed=1)
+    cfg = physics.config
+    hole = cfg.goal_center("right")
+    physics.puck_body.position = (cfg.half_width - cfg.puck_radius, hole[1])
+    physics.puck_body.velocity = (2.0, 0.0)
+    assert physics.shot_on_target("right") == 1.0

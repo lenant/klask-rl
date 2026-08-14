@@ -757,12 +757,18 @@ class KlaskPhysics:
             return 0.0
 
         direction = velocity / speed
-        position = self.puck_body.position
+        x_min, x_max, y_min, y_max = self._puck_bounce_bounds()
+        # `_contain_puck` tolerates the puck a little outside where pymunk
+        # actually resolves a wall contact. Marching from outside the bounce
+        # box finds no wall ahead and reports a miss, so project it back in.
+        position = pymunk.Vec2d(
+            float(np.clip(self.puck_body.position.x, x_min, x_max)),
+            float(np.clip(self.puck_body.position.y, y_min, y_max)),
+        )
         hole = pymunk.Vec2d(*cfg.goal_center(target_side))
         # The puck drops into whichever hole it reaches first, so a path that
         # crosses our own hole on the way is a concession, not a shot.
         own_hole = pymunk.Vec2d(*cfg.goal_center(OPPONENT[target_side]))
-        x_min, x_max, y_min, y_max = self._puck_bounce_bounds()
         capture = cfg.puck_capture_radius
         tail = cfg.puck_radius * 2.0
         closest = float("inf")
