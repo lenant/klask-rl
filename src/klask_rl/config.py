@@ -40,15 +40,11 @@ class ArenaConfig:
     magnet_attach_frames: int = 5
     magnet_release_distance: float = 0.16
     magnet_score_threshold: int = 2
-    puck_start_min_x_fraction: float = 0.125
-    puck_start_max_x_fraction: float = 0.25
-    # How often the puck instead starts *behind* the near handle, between it
-    # and its own back wall. Without this the agent never sees the ball get
-    # past it and has no idea how to recover -- it just orbits. Spawns are
-    # kept clear of the holes so a point is not conceded on the serve.
-    puck_start_behind_probability: float = 0.5
-    puck_start_behind_min_x_fraction: float = 0.3
-    puck_start_behind_max_x_fraction: float = 0.45
+    # The puck serves anywhere on the board, clear of the holes. It used to
+    # land only in a narrow band in front of the near handle, so a ball that
+    # had got past the agent was a state it never saw and had no answer to.
+    puck_start_margin: float = 0.02
+    puck_start_hole_clearance: float = 0.11
     puck_mass: float = 0.045
     max_handle_speed: float = 0.72
     # Actions are target velocities, but a hand (or a gantry) cannot change

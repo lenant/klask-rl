@@ -374,34 +374,35 @@ def test_magnets_start_on_center_line() -> None:
     assert spacing <= physics.config.half_height - physics.config.magnet_radius
 
 
-def test_puck_starts_in_front_or_behind_clear_of_holes_and_handles() -> None:
-    """Serves must land on both sides of the near handle, and never in a hole."""
+def test_puck_serves_anywhere_on_the_board_clear_of_holes() -> None:
+    """A serve may land anywhere except in a hole or on top of a handle."""
     physics = KlaskPhysics()
     cfg = physics.config
-    front_min = cfg.width * cfg.puck_start_min_x_fraction
-    front_max = cfg.width * cfg.puck_start_max_x_fraction
-    behind_min = cfg.width * cfg.puck_start_behind_min_x_fraction
-    behind_max = cfg.width * cfg.puck_start_behind_max_x_fraction
+    x_limit = cfg.half_width - cfg.puck_radius
+    y_limit = cfg.half_height - cfg.puck_radius
     min_handle_distance = cfg.puck_radius + cfg.handle_radius
-    clearance = cfg.goal_radius + cfg.puck_radius
 
     behind = 0
-    for seed in range(120):
+    far_from_centre_line = 0
+    for seed in range(200):
         physics.reset(seed=seed)
         puck = physics.puck_body.position
-        in_front = front_min <= abs(puck.x) <= front_max
-        is_behind = behind_min <= abs(puck.x) <= behind_max
-        assert in_front or is_behind, f"seed {seed}: puck at x={puck.x:.3f}"
-        behind += is_behind
-        assert abs(puck.y) <= cfg.half_height - cfg.puck_radius
+        assert abs(puck.x) <= x_limit and abs(puck.y) <= y_limit
         for agent in AGENTS:
             hole = pymunk.Vec2d(*cfg.goal_center(agent))
-            assert (puck - hole).length >= clearance, f"seed {seed}: served into a hole"
+            assert (puck - hole).length >= cfg.puck_start_hole_clearance, (
+                f"seed {seed}: served into a hole"
+            )
         for body in physics.handle_bodies.values():
             assert (body.position - puck).length >= min_handle_distance
+        near_handle = physics.handle_bodies["left" if puck.x < 0 else "right"]
+        behind += abs(puck.x) > abs(near_handle.position.x)
+        far_from_centre_line += abs(puck.y) > 0.2
 
-    # Both cases must actually occur, or the agent never trains on one of them.
-    assert 20 < behind < 100, f"behind-spawns {behind}/120 is not a real mix"
+    # The whole point is coverage: balls behind the near handle, and balls well
+    # off the centre line, both have to actually occur.
+    assert behind > 20, f"only {behind}/200 serves landed behind the near handle"
+    assert far_from_centre_line > 40, f"only {far_from_centre_line}/200 served off the centre line"
 
 def test_magnet_attraction_fades_with_distance() -> None:
     physics = KlaskPhysics()
