@@ -62,8 +62,8 @@ class ArenaConfig:
     # Rolling resistance: a linear (viscous) term plus a constant deceleration.
     # The constant term is what actually brings a slow ball to rest, so the
     # policy sees stationary pucks the way it will on the real board.
-    puck_linear_drag: float = 0.06
-    puck_rolling_friction: float = 0.0352
+    puck_linear_drag: float = 0.09
+    puck_rolling_friction: float = 0.0528
     puck_stop_speed: float = 0.008
     # Handles are confined to their own half, so a puck that stops in the other
     # half is unreachable by everyone and the rest of the episode is dead. Put

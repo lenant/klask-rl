@@ -248,7 +248,9 @@ def test_puck_loses_speed_bouncing_off_a_wall() -> None:
 
 
 def test_rolling_puck_comes_to_rest() -> None:
-    physics = KlaskPhysics()
+    # No re-serve: this is about friction, and a puck left at rest long enough
+    # would otherwise be put back into play and be moving again at the end.
+    physics = KlaskPhysics(replace(ArenaConfig(), dead_ball_steps=0))
     physics.reset(seed=1)
     cfg = physics.config
     physics.handle_bodies["left"].position = (-0.9, -0.6)
