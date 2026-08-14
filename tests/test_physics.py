@@ -6,7 +6,7 @@ import numpy as np
 import pymunk
 import pytest
 
-from klask_rl.config import ArenaConfig
+from klask_rl.config import AGENTS, ArenaConfig
 from klask_rl.physics import KlaskPhysics
 
 
@@ -374,20 +374,34 @@ def test_magnets_start_on_center_line() -> None:
     assert spacing <= physics.config.half_height - physics.config.magnet_radius
 
 
-def test_puck_starts_on_left_or_right_quarter_without_handle_overlap() -> None:
+def test_puck_starts_in_front_or_behind_clear_of_holes_and_handles() -> None:
+    """Serves must land on both sides of the near handle, and never in a hole."""
     physics = KlaskPhysics()
     cfg = physics.config
-    min_x = cfg.width * cfg.puck_start_min_x_fraction
-    max_x = cfg.width * cfg.puck_start_max_x_fraction
+    front_min = cfg.width * cfg.puck_start_min_x_fraction
+    front_max = cfg.width * cfg.puck_start_max_x_fraction
+    behind_min = cfg.width * cfg.puck_start_behind_min_x_fraction
+    behind_max = cfg.width * cfg.puck_start_behind_max_x_fraction
     min_handle_distance = cfg.puck_radius + cfg.handle_radius
+    clearance = cfg.goal_radius + cfg.puck_radius
 
-    for seed in range(30):
+    behind = 0
+    for seed in range(120):
         physics.reset(seed=seed)
-        puck_position = physics.puck_body.position
-        assert min_x <= abs(puck_position.x) <= max_x
+        puck = physics.puck_body.position
+        in_front = front_min <= abs(puck.x) <= front_max
+        is_behind = behind_min <= abs(puck.x) <= behind_max
+        assert in_front or is_behind, f"seed {seed}: puck at x={puck.x:.3f}"
+        behind += is_behind
+        assert abs(puck.y) <= cfg.half_height - cfg.puck_radius
+        for agent in AGENTS:
+            hole = pymunk.Vec2d(*cfg.goal_center(agent))
+            assert (puck - hole).length >= clearance, f"seed {seed}: served into a hole"
         for body in physics.handle_bodies.values():
-            assert (body.position - puck_position).length >= min_handle_distance
+            assert (body.position - puck).length >= min_handle_distance
 
+    # Both cases must actually occur, or the agent never trains on one of them.
+    assert 20 < behind < 100, f"behind-spawns {behind}/120 is not a real mix"
 
 def test_magnet_attraction_fades_with_distance() -> None:
     physics = KlaskPhysics()

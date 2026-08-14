@@ -127,14 +127,40 @@ class KlaskPhysics:
             self._add_magnet(position)
 
     def _sample_puck_start_position(self, rng: np.random.Generator) -> tuple[float, float]:
+        """Where a serve puts the puck.
+
+        Half the time it lands in front of the near handle, the classic serve.
+        The other half it lands behind, between that handle and its own back
+        wall, so the agent has to learn to turn and recover a ball that got
+        past it -- a situation it otherwise never sees. Either way the spawn is
+        kept clear of both holes so no one concedes on the serve itself.
+        """
         cfg = self.config
-        min_x = cfg.width * cfg.puck_start_min_x_fraction
-        max_x = cfg.width * cfg.puck_start_max_x_fraction
         side = -1.0 if rng.random() < 0.5 else 1.0
-        return (
-            side * rng.uniform(min_x, max_x),
-            rng.uniform(-0.08, 0.08),
-        )
+        behind = rng.random() < cfg.puck_start_behind_probability
+
+        if behind:
+            min_x = cfg.width * cfg.puck_start_behind_min_x_fraction
+            max_x = cfg.width * cfg.puck_start_behind_max_x_fraction
+            y_limit = cfg.half_height - cfg.puck_radius - 0.02
+        else:
+            min_x = cfg.width * cfg.puck_start_min_x_fraction
+            max_x = cfg.width * cfg.puck_start_max_x_fraction
+            y_limit = 0.08
+
+        clearance = cfg.goal_radius + cfg.puck_radius
+        holes = [pymunk.Vec2d(*cfg.goal_center(agent)) for agent in AGENTS]
+        candidate = pymunk.Vec2d(side * float(rng.uniform(min_x, max_x)), float(rng.uniform(-y_limit, y_limit)))
+        for _ in range(32):
+            if all((candidate - hole).length >= clearance for hole in holes):
+                return (candidate.x, candidate.y)
+            candidate = pymunk.Vec2d(
+                side * float(rng.uniform(min_x, max_x)),
+                float(rng.uniform(-y_limit, y_limit)),
+            )
+        # Deep and narrow board: step off the hole line rather than give up.
+        escape = min(y_limit, clearance + cfg.puck_radius)
+        return (candidate.x, escape if candidate.y >= 0.0 else -escape)
 
     def _sample_handle_start_position(self, agent: str, rng: np.random.Generator) -> tuple[float, float]:
         cfg = self.config
