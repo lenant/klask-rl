@@ -59,9 +59,56 @@ def _avoid_own_hole(action: np.ndarray, own_x: float, own_y: float) -> np.ndarra
         magnitude = float(np.linalg.norm(away))
     away = away / magnitude
 
+    # Cancel any component heading into the hole before adding the push out.
+    # Blending instead leaves a net inward action through the outer half of the
+    # bubble, and by the time it reverses the handle can no longer brake inside
+    # the klask radius -- which is exactly how it was still falling in.
+    inward = -float(np.dot(action, away))
+    if inward > 0.0:
+        action = action + away * inward
     urgency = 1.0 - float(np.sqrt(danger))
-    blended = action * (1.0 - urgency) + away * (urgency * 2.0)
-    return np.clip(blended, -1.0, 1.0)
+    return np.clip(action + away * (urgency * 2.0), -1.0, 1.0)
+
+
+# Magnets sit on the centre line, exactly where the experts like to wait, and
+# collecting two of them loses the point. Same keep-out treatment as the hole.
+BASE_OBSERVATION_FEATURES = 16
+MAGNET_AVOID_X = _ARENA.magnet_attraction_range / _ARENA.half_width
+MAGNET_AVOID_Y = _ARENA.magnet_attraction_range / _ARENA.half_height
+
+
+def _push_out_of(action: np.ndarray, offset_x: float, offset_y: float) -> np.ndarray:
+    """Cancel motion into a hazard and add a push away, given a normalised offset."""
+    danger = offset_x * offset_x + offset_y * offset_y
+    if danger >= 1.0:
+        return action
+    away = np.array([offset_x, offset_y], dtype=np.float32)
+    magnitude = float(np.linalg.norm(away))
+    if magnitude < 1e-6:
+        away = np.array([1.0, 1.0], dtype=np.float32)
+        magnitude = float(np.linalg.norm(away))
+    away = away / magnitude
+    inward = -float(np.dot(action, away))
+    if inward > 0.0:
+        action = action + away * inward
+    urgency = 1.0 - float(np.sqrt(danger))
+    return action + away * (urgency * 2.0)
+
+
+def _avoid_magnets(action: np.ndarray, own_x: float, own_y: float, observation: np.ndarray) -> np.ndarray:
+    """Steer clear of loose magnets. Two of them on your handle loses the point."""
+    for index in range(_ARENA.magnet_count):
+        base = BASE_OBSERVATION_FEATURES + index * 5
+        if base + 4 >= observation.shape[0]:
+            break
+        if abs(float(observation[base + 4])) > 0.5:
+            continue  # already attached to someone; avoiding it changes nothing
+        action = _push_out_of(
+            action,
+            (own_x - float(observation[base])) / MAGNET_AVOID_X,
+            (own_y - float(observation[base + 1])) / MAGNET_AVOID_Y,
+        )
+    return np.clip(action, -1.0, 1.0)
 
 
 def _lined_up_behind_puck(own_x: float, own_y: float, puck_x: float, puck_y: float) -> bool:
@@ -125,6 +172,9 @@ class HeuristicOpponent:
             -1.0,
             1.0,
         )
+        # Hole avoidance goes last: a klask loses the point outright, so it
+        # must be able to override the magnet push rather than the reverse.
+        action = _avoid_magnets(action, own_x, own_y, observation)
         return _avoid_own_hole(action, own_x, own_y)
 
 
@@ -153,6 +203,9 @@ class StrikerOpponent:
             -1.0,
             1.0,
         )
+        # Hole avoidance goes last: a klask loses the point outright, so it
+        # must be able to override the magnet push rather than the reverse.
+        action = _avoid_magnets(action, own_x, own_y, observation)
         return _avoid_own_hole(action, own_x, own_y)
 
 

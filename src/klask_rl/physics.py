@@ -140,16 +140,30 @@ class KlaskPhysics:
         y_limit = cfg.half_height - cfg.puck_radius - cfg.puck_start_margin
         holes = [pymunk.Vec2d(*cfg.goal_center(agent)) for agent in AGENTS]
         clearance = cfg.puck_start_hole_clearance
+        # Magnets are added after this runs, so use where they are about to be.
+        magnets = [pymunk.Vec2d(*position) for position in self._magnet_start_positions()]
+        magnet_clearance = cfg.puck_radius + cfg.magnet_radius + cfg.puck_start_margin
+
+        def clear(candidate: pymunk.Vec2d) -> bool:
+            return all((candidate - hole).length >= clearance for hole in holes) and all(
+                (candidate - magnet).length >= magnet_clearance for magnet in magnets
+            )
 
         for _ in range(64):
             candidate = pymunk.Vec2d(
                 float(rng.uniform(-x_limit, x_limit)),
                 float(rng.uniform(-y_limit, y_limit)),
             )
-            if all((candidate - hole).length >= clearance for hole in holes):
+            if clear(candidate):
                 return (candidate.x, candidate.y)
-        # Fall back to the centre line, which is furthest from either hole.
-        return (0.0, float(rng.uniform(-y_limit, y_limit)))
+        # Deterministic fallback: scan a lane clear of both holes and magnets
+        # rather than returning the least-bad sample.
+        for x in np.linspace(-x_limit, x_limit, 33):
+            for y in np.linspace(-y_limit, y_limit, 17):
+                candidate = pymunk.Vec2d(float(x), float(y))
+                if clear(candidate):
+                    return (candidate.x, candidate.y)
+        return (0.0, y_limit)
 
     def _sample_handle_start_position(self, agent: str, rng: np.random.Generator) -> tuple[float, float]:
         """Place a handle anywhere in its own half, clear of its hole and the puck.
@@ -164,6 +178,12 @@ class KlaskPhysics:
         puck_position = self.puck_body.position
         min_distance = cfg.puck_radius + cfg.handle_radius + 0.02
 
+        # Starting inside a magnet's pull collects it within a step or two,
+        # which the reward punishes -- unearned, since the agent did not choose
+        # to be there.
+        magnets = [pymunk.Vec2d(*position) for position in self._magnet_start_positions()]
+        magnet_clearance = cfg.magnet_attraction_range + cfg.handle_radius
+
         for _ in range(64):
             candidate = pymunk.Vec2d(
                 float(rng.uniform(x_min, x_max)),
@@ -172,6 +192,8 @@ class KlaskPhysics:
             if (candidate - hole).length < cfg.handle_start_hole_clearance:
                 continue
             if (candidate - puck_position).length < min_distance:
+                continue
+            if any((candidate - magnet).length < magnet_clearance for magnet in magnets):
                 continue
             return (candidate.x, candidate.y)
 
