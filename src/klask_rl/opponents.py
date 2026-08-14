@@ -33,6 +33,37 @@ HOLE_CLEARANCE_Y = 0.75 * ALIGN_GAP
 WALL_ESCAPE_Y = 0.14
 
 
+# Radius of the keep-out bubble around the agent's own hole, per axis. Skirting
+# only the *target* is not enough: the handle can drive through the hole on its
+# way to a perfectly safe target, which is how deep starts turned into klasks.
+HOLE_AVOID_X = 0.17
+HOLE_AVOID_Y = 0.24
+
+
+def _avoid_own_hole(action: np.ndarray, own_x: float, own_y: float) -> np.ndarray:
+    """Bend an action away from the agent's own hole as it gets close.
+
+    A potential field rather than a target offset, so it applies whatever the
+    handle happens to be doing -- including travelling somewhere else entirely.
+    """
+    offset_x = (own_x - OWN_HOLE_X) / HOLE_AVOID_X
+    offset_y = own_y / HOLE_AVOID_Y
+    danger = offset_x * offset_x + offset_y * offset_y
+    if danger >= 1.0:
+        return action
+
+    away = np.array([offset_x, offset_y], dtype=np.float32)
+    magnitude = float(np.linalg.norm(away))
+    if magnitude < 1e-6:
+        away = np.array([1.0, 1.0], dtype=np.float32)
+        magnitude = float(np.linalg.norm(away))
+    away = away / magnitude
+
+    urgency = 1.0 - float(np.sqrt(danger))
+    blended = action * (1.0 - urgency) + away * (urgency * 2.0)
+    return np.clip(blended, -1.0, 1.0)
+
+
 def _lined_up_behind_puck(own_x: float, own_y: float, puck_x: float, puck_y: float) -> bool:
     """True once the handle sits behind the puck and roughly on its line."""
     return own_x < puck_x - CONTACT_GAP * 0.5 and abs(own_y - puck_y) < ALIGN_GAP
@@ -89,8 +120,12 @@ class HeuristicOpponent:
             target_x = -0.55
             target_y = np.clip(puck_y * 0.75, -0.65, 0.65)
 
-        action = np.array([target_x - own_x, target_y - own_y], dtype=np.float32)
-        return np.clip(action * self.aggression, -1.0, 1.0)
+        action = np.clip(
+            np.array([target_x - own_x, target_y - own_y], dtype=np.float32) * self.aggression,
+            -1.0,
+            1.0,
+        )
+        return _avoid_own_hole(action, own_x, own_y)
 
 
 class StrikerOpponent:
@@ -113,8 +148,12 @@ class StrikerOpponent:
         else:
             target_x, target_y = _attack_target(own_x, own_y, puck_x, puck_y, standoff=0.14)
 
-        action = np.array([target_x - own_x, target_y - own_y], dtype=np.float32)
-        return np.clip(action * self.aggression, -1.0, 1.0)
+        action = np.clip(
+            np.array([target_x - own_x, target_y - own_y], dtype=np.float32) * self.aggression,
+            -1.0,
+            1.0,
+        )
+        return _avoid_own_hole(action, own_x, own_y)
 
 
 class PassiveOpponent:
