@@ -396,6 +396,9 @@ def run_eval(
         contacts = 0
         final_info = info
         while not done:
+            if render and env.base_env.physics.skip_requested:
+                env.base_env.physics.skip_requested = False
+                break
             action, _ = model.predict(obs, deterministic=deterministic)
             obs, reward, terminated, truncated, final_info = env.step(action)
             episode_reward += reward
@@ -405,6 +408,8 @@ def run_eval(
             if render:
                 env.render()
                 while env.base_env.physics.paused:
+                    if env.base_env.physics.skip_requested:
+                        break
                     time.sleep(env.base_env.arena_config.control_dt)
                     env.render()
                 time.sleep(env.base_env.arena_config.control_dt)
@@ -609,6 +614,7 @@ def run_play(
             "reward_profile": reward_profile,
             "controls": "WASD",
             "pause": "space",
+            "next episode": "n",
             "quit": "close window or Escape",
         }
     )
@@ -620,12 +626,17 @@ def run_play(
             final_info = infos[human_side]
             env.render()
             while not done and not env.physics.quit_requested:
+                if env.physics.skip_requested:
+                    env.physics.skip_requested = False
+                    break
                 keys = _poll_pygame_keys(pygame)
                 if _key_is_pressed(keys, pygame.K_ESCAPE):
                     env.physics.quit_requested = True
                     break
 
                 while env.physics.paused and not env.physics.quit_requested:
+                    if env.physics.skip_requested:
+                        break
                     time.sleep(env.arena_config.control_dt)
                     env.render()
                     keys = _poll_pygame_keys(pygame)

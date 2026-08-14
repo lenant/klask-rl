@@ -66,6 +66,7 @@ class KlaskPhysics:
         self.serves = 0
         self.paused = False
         self.quit_requested = False
+        self.skip_requested = False
         self._screen: Any | None = None
         self._clock: Any | None = None
         arena_width = 900
@@ -98,6 +99,7 @@ class KlaskPhysics:
         self._magnet_contact_frames = []
         self.paused = False
         self.quit_requested = False
+        self.skip_requested = False
 
         self._add_walls()
 
@@ -937,6 +939,11 @@ class KlaskPhysics:
                     return None
                 if event.type == pygame.KEYDOWN and event.key == pygame.K_SPACE:
                     self.paused = not self.paused
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_n:
+                    # Abandon this episode and move to the next one. Escape
+                    # ends the whole session instead.
+                    self.skip_requested = True
+                    self.paused = False
         else:
             surface = pygame.Surface((width, height))
 
@@ -1012,6 +1019,7 @@ class KlaskPhysics:
             self._screen = None
             self._clock = None
             self.paused = False
+            self.skip_requested = False
 
     def _draw_reward_overlay(self, pygame: Any, surface: Any, reward_overlay: RewardOverlay) -> None:
         pygame.font.init()

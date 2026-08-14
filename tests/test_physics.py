@@ -654,3 +654,28 @@ def test_shot_on_target_handles_a_puck_outside_the_bounce_box() -> None:
     physics.puck_body.position = (cfg.half_width - cfg.puck_radius, hole[1])
     physics.puck_body.velocity = (2.0, 0.0)
     assert physics.shot_on_target("right") == 1.0
+
+
+def test_n_key_requests_skipping_the_episode(monkeypatch) -> None:
+    monkeypatch.setenv("SDL_VIDEODRIVER", "dummy")
+    import pygame
+
+    physics = KlaskPhysics()
+    physics.render("human")
+    assert not physics.skip_requested
+
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_n))
+    physics.render("human")
+    assert physics.skip_requested
+
+    # A skip must also release a pause, or the loop would sit in the pause
+    # branch waiting for a keypress that already happened.
+    physics.paused = True
+    physics.skip_requested = False
+    pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_n))
+    physics.render("human")
+    assert physics.skip_requested
+    assert not physics.paused
+
+    physics.close()
+    assert not physics.skip_requested
