@@ -263,6 +263,28 @@ REWARD_PROFILES: dict[str, RewardConfig] = {
         time_penalty=0.0,
         action_penalty=0.0,
     ),
+    # Ablation of simple_v5: progress without aim. simple_v5 beat the previous
+    # leader 39-12, but it changed two things at once, so this isolates whether
+    # the bank-shot aim term earned its keep or plain "drive it downfield" did
+    # all the work.
+    "simple_v5_noaim": RewardConfig(
+        terminal_goal=12.0,
+        progress=0.3,
+        aim=0.0,
+        puck_position=0.0,
+        puck_speed=0.0,
+        contact=0.0,
+        puck_distance=0.0,
+        defense=0.0,
+        own_goal_danger=0.0,
+        magnet_attached_penalty=0.0,
+        magnet_proximity_penalty=0.0,
+        magnet_attach_penalty=2.0,
+        magnet_pull_penalty=0.01,
+        own_side_penalty=0.04,
+        time_penalty=0.0,
+        action_penalty=0.0,
+    ),
     # Experiment 2. simple_v4 plus explicit shot shaping: progress for driving
     # the puck downfield, aim for pointing it at the hole including bank shots.
     # progress is already speed-scaled (it is a per-step displacement) and aim
