@@ -321,7 +321,17 @@ def run_train(
             tensorboard_log=str(output_dir / "tensorboard"),
             seed=seed,
             device=device,
-            policy_kwargs={"net_arch": list(net_arch)},
+            policy_kwargs={
+                "net_arch": list(net_arch),
+                # SB3 defaults log_std to 0, i.e. an action std of 1.0 on a
+                # [-1, 1] action space, while expert actions average 0.35 --
+                # exploration noise about 3x the signal. Every rollout is then
+                # effectively random, which wipes out the behaviour-cloned
+                # warm start and, on the slowed board, never stumbles into
+                # touching a resting ball. -0.9 starts where the model that
+                # actually worked ended up (std 0.40).
+                "log_std_init": -0.9,
+            },
             verbose=1,
         )
         initial_last_save = 0
