@@ -117,3 +117,40 @@ distribution:
   bubble, and by then the acceleration limit leaves no room to brake. Behind the
   hole it also needs a sideways escape, since "directly away" there means
   driving into the back wall and every route back into play reads as inward.
+
+
+## Training results, and the honest position
+
+Nothing trained on the slow board has beaten the fast-board model yet.
+`exp3_24M_baseline` remains the one to use.
+
+| model | vs seed (sides swapped) | goals for/against |
+| --- | --- | --- |
+| seed `exp3_24M_baseline` | -- | 25 / 13 |
+| warm start, no league | 26-74 (p<0.001) | 25 / 32 |
+| warm start, league restored | 30-50 (p=0.03) | 22 / 30 |
+
+Two causes found, in order:
+
+1. **The self-play league is not carried across a warm start.** Resuming into
+   a fresh output dir restores zero checkpoint opponents, so a model forged
+   against 480 snapshots practises against passive and random instead. Damage
+   was measurable at +100k steps. Copying eligible snapshots across moved the
+   result from 26-74 to 30-50.
+2. **The reward has no defensive term.** Scoring is unchanged across all three
+   models at 22-25 goals; the gap is entirely conceding, 30 against the seed's
+   13. `defense` and `own_goal_danger` are zero in the whole `simple*` family,
+   which was harmless while the ball always started in front of the handle and
+   is not harmless now that it serves anywhere. `slow_v2` restores both.
+
+### The methodological trap
+
+Within-training reward curves are not evidence of improvement. The no-league
+run's reward rose throughout while the model was getting worse -- it was
+climbing against progressively weaker opposition. Only head-to-head against a
+fixed reference exposed it. Benchmark aggregate scores are also measured
+against third parties and can disagree with a direct match; when they conflict,
+the direct match is what counts.
+
+Episode budget shows up here too: at 750 steps, two decent models draw 39 of 60
+games, so most comparisons at that budget carry very little signal.
