@@ -5,10 +5,21 @@
 # the spawn-distance curriculum to re-teach contact under the new timing before
 # widening to the full board. From-scratch stalls here; this does not.
 cd "$(dirname "$0")"
-RUN=runs/slow_warm_cur1500
+RUN=runs/slow_league
 LOG=$RUN/train.log
 mkdir -p $RUN
 cp runs/klask/latest/exp3_24M_baseline.zip $RUN/seed.zip
+# Carry the seed's self-play league across. Resuming into a fresh output dir
+# restores zero checkpoint opponents, so the agent practises only against the
+# scripted baselines -- a model forged against 480 opponents then trains
+# against passive and random, and gets worse within 100k steps.
+# Resuming into a fresh output dir restores zero checkpoint opponents, so a
+# model forged against hundreds of snapshots would practise only against the
+# scripted baselines and degrade within 100k steps.
+mkdir -p $RUN/latest/snapshots
+PYTHONPATH=src uv run python scripts/seed_league.py \
+  runs/exp3_progress_only/latest/snapshots $RUN/latest/snapshots 24010752 --keep 64 | tee -a $LOG
+echo "seeded league: $(ls $RUN/latest/snapshots/*.zip 2>/dev/null | wc -l) opponents" | tee -a $LOG
 COMMON="--num-envs 12 --n-steps 1024 --batch-size 1024 --snapshot-freq 100000 \
   --max-steps 1500 --reward-profile slow_v1 --vec-env subproc --device cpu \
   --policy-net-arch 256x256x256 --ent-coef 0.002 --output-dir $RUN"
