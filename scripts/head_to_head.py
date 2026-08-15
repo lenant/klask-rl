@@ -4,7 +4,11 @@ Aggregate benchmark scores are measured against *third parties*, so two models
 can each look better than the other depending on the opponent. Playing them
 directly is the measure that settles it.
 
+Either side may be a scripted policy instead of a checkpoint: pass one of
+planner, striker, heuristic, random, passive by name.
+
     PYTHONPATH=src uv run python scripts/head_to_head.py a.zip b.zip --games 150
+    PYTHONPATH=src uv run python scripts/head_to_head.py planner a.zip --games 150
 """
 
 from __future__ import annotations
@@ -18,14 +22,36 @@ from dataclasses import replace
 
 from klask_rl.config import ArenaConfig
 from klask_rl.envs import KlaskParallelEnv
-from klask_rl.opponents import SB3CheckpointOpponent
+from klask_rl.opponents import (
+    HeuristicOpponent,
+    OpponentPolicy,
+    PassiveOpponent,
+    PlannerOpponent,
+    RandomOpponent,
+    SB3CheckpointOpponent,
+    StrikerOpponent,
+)
+
+SCRIPTED = {
+    "planner": PlannerOpponent,
+    "striker": StrikerOpponent,
+    "heuristic": HeuristicOpponent,
+    "random": RandomOpponent,
+    "passive": PassiveOpponent,
+}
+
+
+def make_policy(name: str) -> OpponentPolicy:
+    """A checkpoint path, or the name of one of the scripted policies."""
+    factory = SCRIPTED.get(name)
+    return factory() if factory else SB3CheckpointOpponent(name)
 
 
 def _play(left: str, right: str, games: int, seed0: int, profile: str, max_steps: int) -> Counter:
     env = KlaskParallelEnv(
         arena_config=replace(ArenaConfig(), max_steps=max_steps), reward_profile=profile
     )
-    policies = {"left": SB3CheckpointOpponent(left), "right": SB3CheckpointOpponent(right)}
+    policies = {"left": make_policy(left), "right": make_policy(right)}
     results: Counter = Counter()
     for game in range(games):
         observations, _ = env.reset(seed=seed0 + game)
@@ -55,8 +81,8 @@ def two_sided_p(wins: int, losses: int) -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("model_a", type=Path)
-    parser.add_argument("model_b", type=Path)
+    parser.add_argument("model_a", type=Path, help="Checkpoint path, or a scripted name.")
+    parser.add_argument("model_b", type=Path, help="Checkpoint path, or a scripted name.")
     parser.add_argument("--games", type=int, default=150, help="Total games, split across sides.")
     parser.add_argument("--seed", type=int, default=90000)
     parser.add_argument("--reward-profile", default="slow_v1")

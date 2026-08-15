@@ -711,3 +711,74 @@ def test_handles_start_anywhere_in_their_own_half_clear_of_their_hole() -> None:
         ys = [y for _, y in points]
         assert max(xs) - min(xs) > 0.5, f"{agent} x barely varies"
         assert max(ys) - min(ys) > 0.5, f"{agent} y barely varies"
+
+
+def test_short_horizon_prediction_tracks_the_simulation() -> None:
+    """`advance` is what the planner leads a moving ball with.
+
+    It has to agree with the simulation over the horizon a handle needs to
+    reach the ball -- a couple of dozen control steps -- including across a
+    wall bounce, or the handle arrives where the ball used to be.
+    """
+    cfg = ArenaConfig()
+    horizon = 24
+    for velocity in ((0.9, 0.35), (-0.5, 0.8), (0.7, -0.9), (0.25, 0.05)):
+        physics = KlaskPhysics(cfg)
+        physics.reset(seed=3)
+        physics.puck_body.position = (-0.2, 0.1)
+        physics.puck_body.velocity = velocity
+        # Park the handles and magnets: this is about the puck's own motion.
+        for agent, spot in (("left", (-0.95, -0.70)), ("right", (0.95, -0.70))):
+            physics.handle_bodies[agent].position = spot
+        for body in physics.magnet_bodies:
+            body.position = (0.0, 0.72)
+            body.velocity = (0.0, 0.0)
+
+        predicted, _ = physics.trajectory.advance(
+            (-0.2, 0.1), velocity, horizon * cfg.frame_skip
+        )
+        for _ in range(horizon):
+            physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+        actual = physics.puck_body.position
+        error = (actual - predicted).length
+        assert error < 2.0 * cfg.puck_radius, (
+            f"predicted {tuple(predicted)} but the puck reached {tuple(actual)} "
+            f"from velocity {velocity} (off by {error:.3f})"
+        )
+
+
+def test_marched_resting_place_matches_the_simulation() -> None:
+    """`march` decides which shot the planner takes, so it must land the ball there."""
+    cfg = ArenaConfig()
+    start = (-0.3, -0.1)
+    checked = 0
+    for velocity in ((0.55, 0.2), (-0.35, 0.5), (0.4, -0.45), (0.3, 0.62), (-0.6, -0.3)):
+        physics = KlaskPhysics(cfg)
+        physics.reset(seed=3)
+        physics.puck_body.position = start
+        physics.puck_body.velocity = velocity
+        for agent, spot in (("left", (-0.95, -0.70)), ("right", (0.95, -0.70))):
+            physics.handle_bodies[agent].position = spot
+        for body in physics.magnet_bodies:
+            body.position = (0.0, 0.72)
+            body.velocity = (0.0, 0.0)
+
+        path = physics.trajectory.march(start, velocity, max_reflections=6)
+        if path.fell_into is not None:
+            continue  # a shot that scores has no resting place to compare
+        scored = False
+        for _ in range(900):
+            result = physics.step({"left": np.zeros(2), "right": np.zeros(2)})
+            scored = result.scored_by is not None
+            if scored or physics.puck_body.velocity.length == 0.0:
+                break
+        if scored:
+            continue
+        assert physics.puck_body.velocity.length == 0.0, "puck never came to rest"
+        error = (physics.puck_body.position - pymunk.Vec2d(*path.rest)).length
+        assert error < 6.0 * cfg.puck_radius, (
+            f"marched to {path.rest} but the puck stopped at "
+            f"{tuple(physics.puck_body.position)} (off by {error:.3f})"
+        )
+        checked += 1
+    assert checked >= 3, f"only {checked} trajectories were comparable"

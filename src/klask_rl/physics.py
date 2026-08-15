@@ -23,6 +23,275 @@ class PhysicsStepResult:
 # became a much harder serve every time the game was slowed down.
 SERVE_SPEED_FRACTION = 0.078
 
+@dataclass(frozen=True)
+class PuckPath:
+    """The corners of a struck puck's path, and which hole swallowed it.
+
+    ``points`` runs start -> each bounce -> where it ends up. The last point is
+    where the puck comes to rest, unless the reflection budget ran out first, in
+    which case it is simply the furthest the walk got.
+    """
+
+    points: tuple[tuple[float, float], ...]
+    fell_into: str | None
+
+    @property
+    def rest(self) -> tuple[float, float]:
+        return self.points[-1]
+
+    @property
+    def reflections(self) -> int:
+        return max(0, len(self.points) - 2)
+
+    def closest_approach(self, target: tuple[float, float]) -> float:
+        centre = pymunk.Vec2d(*target)
+        if len(self.points) == 1:
+            return (centre - pymunk.Vec2d(*self.points[0])).length
+        best = float("inf")
+        for start, end in zip(self.points, self.points[1:], strict=False):
+            origin = pymunk.Vec2d(*start)
+            leg = pymunk.Vec2d(*end) - origin
+            length = leg.length
+            if length <= 1e-9:
+                best = min(best, (centre - origin).length)
+                continue
+            along = float(np.clip((centre - origin).dot(leg) / length, 0.0, length))
+            best = min(best, (origin + leg * (along / length) - centre).length)
+        return best
+
+    def crosses(self, x_line: float) -> float | None:
+        """The y at which the path first crosses ``x_line``, if it ever does."""
+        for start, end in zip(self.points, self.points[1:], strict=False):
+            if (start[0] - x_line) * (end[0] - x_line) > 0.0:
+                continue
+            span = end[0] - start[0]
+            if abs(span) < 1e-9:
+                return start[1]
+            fraction = (x_line - start[0]) / span
+            return start[1] + fraction * (end[1] - start[1])
+        return None
+
+
+class PuckTrajectory:
+    """Where a puck rolls and how it bounces, as a function of the config alone.
+
+    Split out of the simulation so a planner can ask the *same* model the
+    physics resolves. That matters more than it sounds: a second copy of this
+    that reflected specularly scored bank shots barely better than a coin flip,
+    because a wall returns only part of the normal component and rubs the
+    tangential one off.
+    """
+
+    def __init__(self, config: ArenaConfig) -> None:
+        self.config = config
+
+    def bounds(self) -> tuple[float, float, float, float]:
+        """Where the puck's centre turns around, i.e. the wall surface offset in."""
+        cfg = self.config
+        inset_x = cfg.half_width - cfg.wall_radius - cfg.puck_radius
+        inset_y = cfg.half_height - cfg.wall_radius - cfg.puck_radius
+        return -inset_x, inset_x, -inset_y, inset_y
+
+    def stopping_distance(self, speed: float) -> float:
+        """How far the puck still rolls before friction brings it to rest.
+
+        Closed form of dv/dd = -(k*v + a)/v for the drag-plus-constant model in
+        ``KlaskPhysics._decelerate``.
+        """
+        cfg = self.config
+        drag = cfg.puck_linear_drag
+        rolling = cfg.puck_rolling_friction
+        if speed <= cfg.puck_stop_speed:
+            return 0.0
+        if rolling <= 1e-9:
+            return float("inf")
+        if drag <= 1e-9:
+            return speed * speed / (2.0 * rolling)
+        return speed / drag - (rolling / (drag * drag)) * float(np.log1p(drag * speed / rolling))
+
+    def speed_after_rolling(self, speed: float, distance: float) -> float:
+        """Speed left after rolling ``distance``. Inverts ``stopping_distance``."""
+        budget = self.stopping_distance(speed)
+        if not np.isfinite(budget):
+            return speed
+        if distance >= budget:
+            return 0.0
+        target = budget - distance
+        low, high = 0.0, speed
+        for _ in range(16):
+            middle = 0.5 * (low + high)
+            if self.stopping_distance(middle) < target:
+                low = middle
+            else:
+                high = middle
+        return 0.5 * (low + high)
+
+    def bounce_direction(self, direction: pymunk.Vec2d, axis: str) -> pymunk.Vec2d:
+        """Bounce a heading off a wall the way the simulation actually does.
+
+        A wall is not a mirror. It returns only ``puck_wall_elasticity`` of the
+        normal component and rubs tangential speed off by Coulomb friction, so
+        the outgoing angle is flatter than the incoming one.
+        """
+        cfg = self.config
+        restitution = cfg.puck_wall_elasticity
+        friction = cfg.puck_friction * cfg.wall_friction
+        normal, tangent = (
+            (direction.x, direction.y) if axis == "x" else (direction.y, direction.x)
+        )
+        outgoing_normal = -normal * restitution
+        # Coulomb: the tangential impulse is capped by friction times the
+        # normal impulse, which carries the (1 + e) factor.
+        scrub = friction * (1.0 + restitution) * abs(normal)
+        outgoing_tangent = float(np.sign(tangent) * max(0.0, abs(tangent) - scrub))
+        return (
+            pymunk.Vec2d(outgoing_normal, outgoing_tangent)
+            if axis == "x"
+            else pymunk.Vec2d(outgoing_tangent, outgoing_normal)
+        )
+
+    def _entry_distance(
+        self,
+        origin: pymunk.Vec2d,
+        heading: pymunk.Vec2d,
+        limit: float,
+        centre: pymunk.Vec2d,
+    ) -> float | None:
+        """How far along this leg the puck first falls into ``centre``."""
+        capture = self.config.puck_capture_radius
+        to_centre = centre - origin
+        along = to_centre.dot(heading)
+        perpendicular_sq = to_centre.length_squared - along * along
+        if perpendicular_sq > capture * capture:
+            return None
+        half_chord = float(np.sqrt(max(0.0, capture * capture - perpendicular_sq)))
+        if along + half_chord < 0.0:
+            return None
+        enter = max(0.0, along - half_chord)
+        return enter if enter <= limit else None
+
+    def advance(
+        self,
+        position: tuple[float, float],
+        velocity: tuple[float, float],
+        substeps: int,
+    ) -> tuple[pymunk.Vec2d, pymunk.Vec2d]:
+        """Roll the puck forward ``substeps`` physics steps.
+
+        Short-horizon prediction for leading a moving ball, stepped the same way
+        ``KlaskPhysics._decelerate`` and ``_contain_puck`` do rather than by the
+        closed form -- over a few control steps the difference between the two
+        is what decides whether the handle arrives where the ball will be.
+        """
+        cfg = self.config
+        current = pymunk.Vec2d(float(position[0]), float(position[1]))
+        moving = pymunk.Vec2d(float(velocity[0]), float(velocity[1]))
+        x_min, x_max, y_min, y_max = self.bounds()
+        multiplier = max(0.0, 1.0 - cfg.puck_linear_drag * cfg.physics_dt)
+        for _ in range(max(0, substeps)):
+            speed = moving.length
+            if speed <= cfg.puck_stop_speed:
+                return current, pymunk.Vec2d(0.0, 0.0)
+            current = current + moving * cfg.physics_dt
+            for axis, value, low, high in (
+                ("x", current.x, x_min, x_max),
+                ("y", current.y, y_min, y_max),
+            ):
+                if low <= value <= high:
+                    continue
+                bound = low if value < low else high
+                current = (
+                    pymunk.Vec2d(bound, current.y)
+                    if axis == "x"
+                    else pymunk.Vec2d(current.x, bound)
+                )
+                speed = moving.length
+                moving = self.bounce_direction(moving / speed, axis) * speed
+            speed = moving.length
+            if speed <= cfg.puck_stop_speed:
+                return current, pymunk.Vec2d(0.0, 0.0)
+            after = speed * multiplier - cfg.puck_rolling_friction * cfg.physics_dt
+            if after <= cfg.puck_stop_speed:
+                return current, pymunk.Vec2d(0.0, 0.0)
+            moving = moving * (after / speed)
+        return current, moving
+
+    def march(
+        self,
+        position: tuple[float, float],
+        velocity: tuple[float, float],
+        max_reflections: int = 2,
+    ) -> PuckPath:
+        """Walk a puck launched from ``position`` at ``velocity`` to its fate."""
+        cfg = self.config
+        heading = pymunk.Vec2d(float(velocity[0]), float(velocity[1]))
+        speed = heading.length
+        x_min, x_max, y_min, y_max = self.bounds()
+        # `_contain_puck` tolerates the puck a little outside where pymunk
+        # actually resolves a wall contact. Marching from outside the bounce
+        # box finds no wall ahead and reports a miss, so project it back in.
+        current = pymunk.Vec2d(
+            float(np.clip(position[0], x_min, x_max)),
+            float(np.clip(position[1], y_min, y_max)),
+        )
+        points: list[tuple[float, float]] = [(current.x, current.y)]
+        if speed <= cfg.puck_stop_speed:
+            return PuckPath(points=tuple(points), fell_into=None)
+        direction = heading / speed
+        holes = {side: pymunk.Vec2d(*cfg.goal_center(side)) for side in AGENTS}
+
+        for _ in range(max_reflections + 1):
+            # Distance to the first wall the puck would reach on this heading.
+            travel = float("inf")
+            axis: str | None = None
+            for component, low, high, name in (
+                (direction.x, x_min, x_max, "x"),
+                (direction.y, y_min, y_max, "y"),
+            ):
+                origin = current.x if name == "x" else current.y
+                if component > 1e-9:
+                    candidate = (high - origin) / component
+                elif component < -1e-9:
+                    candidate = (low - origin) / component
+                else:
+                    continue
+                if 0.0 <= candidate < travel:
+                    travel = candidate
+                    axis = name
+            if axis is None or not np.isfinite(travel):
+                break
+
+            # The puck only travels as far as its remaining energy allows; a
+            # bank shot that runs out of roll before the hole is not a shot.
+            reach = self.stopping_distance(speed)
+            leg = min(travel, reach)
+
+            # Whichever hole the path reaches first is the one it falls into.
+            entries = {
+                side: self._entry_distance(current, direction, leg, centre)
+                for side, centre in holes.items()
+            }
+            reached = {side: at for side, at in entries.items() if at is not None}
+            if reached:
+                side = min(reached, key=lambda name: reached[name])
+                entry = current + direction * reached[side]
+                points.append((entry.x, entry.y))
+                return PuckPath(points=tuple(points), fell_into=side)
+
+            current = current + direction * leg
+            points.append((current.x, current.y))
+            if travel >= reach:
+                break  # rolls to a stop before reaching another wall
+            speed = self.speed_after_rolling(speed, leg)
+            bounced = self.bounce_direction(direction, axis) * speed
+            speed = bounced.length
+            if speed <= cfg.puck_stop_speed:
+                break
+            direction = bounced / speed
+
+        return PuckPath(points=tuple(points), fell_into=None)
+
+
 RewardOverlay = dict[str, dict[str, Any]]
 
 REWARD_COMPONENT_LABELS: tuple[tuple[str, str], ...] = (
@@ -54,6 +323,7 @@ class KlaskPhysics:
 
     def __init__(self, config: ArenaConfig | None = None) -> None:
         self.config = config or ArenaConfig()
+        self.trajectory = PuckTrajectory(self.config)
         self.space: pymunk.Space
         self.puck_body: pymunk.Body
         self.puck_shape: pymunk.Circle
@@ -809,78 +1079,21 @@ class KlaskPhysics:
                 break
 
     def _puck_bounce_bounds(self) -> tuple[float, float, float, float]:
-        """Where the puck's centre turns around, i.e. the wall surface offset in."""
-        cfg = self.config
-        inset_x = cfg.half_width - cfg.wall_radius - cfg.puck_radius
-        inset_y = cfg.half_height - cfg.wall_radius - cfg.puck_radius
-        return -inset_x, inset_x, -inset_y, inset_y
+        return self.trajectory.bounds()
 
     def _stopping_distance(self, speed: float) -> float:
-        """How far the puck still rolls before friction brings it to rest.
-
-        Closed form of dv/dd = -(k*v + a)/v for the drag-plus-constant model in
-        ``_decelerate``.
-        """
-        cfg = self.config
-        drag = cfg.puck_linear_drag
-        rolling = cfg.puck_rolling_friction
-        if speed <= cfg.puck_stop_speed:
-            return 0.0
-        if rolling <= 1e-9:
-            return float("inf")
-        if drag <= 1e-9:
-            return speed * speed / (2.0 * rolling)
-        return speed / drag - (rolling / (drag * drag)) * float(np.log1p(drag * speed / rolling))
+        return self.trajectory.stopping_distance(speed)
 
     def _speed_after_rolling(self, speed: float, distance: float) -> float:
-        """Speed left after rolling ``distance``. Inverts _stopping_distance."""
-        budget = self._stopping_distance(speed)
-        if not np.isfinite(budget):
-            return speed
-        if distance >= budget:
-            return 0.0
-        target = budget - distance
-        low, high = 0.0, speed
-        for _ in range(16):
-            middle = 0.5 * (low + high)
-            if self._stopping_distance(middle) < target:
-                low = middle
-            else:
-                high = middle
-        return 0.5 * (low + high)
+        return self.trajectory.speed_after_rolling(speed, distance)
 
     def _bounce_direction(self, direction: pymunk.Vec2d, axis: str) -> pymunk.Vec2d:
-        """Bounce a heading off a wall the way the simulation actually does.
-
-        A wall is not a mirror. It returns only ``puck_wall_elasticity`` of the
-        normal component and rubs tangential speed off by Coulomb friction, so
-        the outgoing angle is flatter than the incoming one. Reflecting
-        specularly instead makes every leg after the first fictitious -- as
-        measured, a bank shot predicted that way lands barely better than a coin
-        flip.
-        """
-        cfg = self.config
-        restitution = cfg.puck_wall_elasticity
-        friction = cfg.puck_friction * cfg.wall_friction
-        normal, tangent = (
-            (direction.x, direction.y) if axis == "x" else (direction.y, direction.x)
-        )
-        outgoing_normal = -normal * restitution
-        # Coulomb: the tangential impulse is capped by friction times the
-        # normal impulse, which carries the (1 + e) factor.
-        scrub = friction * (1.0 + restitution) * abs(normal)
-        outgoing_tangent = float(np.sign(tangent) * max(0.0, abs(tangent) - scrub))
-        return (
-            pymunk.Vec2d(outgoing_normal, outgoing_tangent)
-            if axis == "x"
-            else pymunk.Vec2d(outgoing_tangent, outgoing_normal)
-        )
+        return self.trajectory.bounce_direction(direction, axis)
 
     def shot_on_target(self, target_side: str, max_reflections: int = 2) -> float:
         """How well the puck's current path leads into ``target_side``'s hole.
 
-        Straight-line propagation with specular wall bounces, so this scores the
-        *aim* of a shot rather than its outcome: friction, spin, and anything in
+        Scores the *aim* of a shot rather than its outcome: spin and anything in
         the way are ignored. A shot only has to be pointed at the hole to count,
         which is the point -- banking off a wall is a normal way to score in
         Klask, and rewarding only straight-on shots would teach otherwise.
@@ -890,91 +1103,24 @@ class KlaskPhysics:
         """
         cfg = self.config
         velocity = self.puck_body.velocity
-        speed = velocity.length
-        if speed <= 1e-9:
+        if velocity.length <= 1e-9:
             return 0.0
 
-        direction = velocity / speed
-        x_min, x_max, y_min, y_max = self._puck_bounce_bounds()
-        # `_contain_puck` tolerates the puck a little outside where pymunk
-        # actually resolves a wall contact. Marching from outside the bounce
-        # box finds no wall ahead and reports a miss, so project it back in.
-        position = pymunk.Vec2d(
-            float(np.clip(self.puck_body.position.x, x_min, x_max)),
-            float(np.clip(self.puck_body.position.y, y_min, y_max)),
+        path = self.trajectory.march(
+            (self.puck_body.position.x, self.puck_body.position.y),
+            (velocity.x, velocity.y),
+            max_reflections=max_reflections,
         )
-        hole = pymunk.Vec2d(*cfg.goal_center(target_side))
-        # The puck drops into whichever hole it reaches first, so a path that
-        # crosses our own hole on the way is a concession, not a shot.
-        own_hole = pymunk.Vec2d(*cfg.goal_center(OPPONENT[target_side]))
+        if path.fell_into is not None:
+            # The puck drops into whichever hole it reaches first, so a path
+            # that crosses our own hole on the way is a concession, not a shot.
+            return 1.0 if path.fell_into == target_side else 0.0
+
+        closest = path.closest_approach(cfg.goal_center(target_side))
         capture = cfg.puck_capture_radius
-        tail = cfg.puck_radius * 2.0
-        closest = float("inf")
-
-        def entry_distance(origin: pymunk.Vec2d, heading: pymunk.Vec2d, limit: float, centre: pymunk.Vec2d) -> float | None:
-            """How far along this leg the puck first falls into ``centre``."""
-            to_centre = centre - origin
-            along = to_centre.dot(heading)
-            perpendicular_sq = to_centre.length_squared - along * along
-            if perpendicular_sq > capture * capture:
-                return None
-            half_chord = float(np.sqrt(max(0.0, capture * capture - perpendicular_sq)))
-            enter = along - half_chord
-            if along + half_chord < 0.0:
-                return None
-            enter = max(0.0, enter)
-            return enter if enter <= limit else None
-
-        for _ in range(max_reflections + 1):
-            # Distance to the first wall the puck would reach on this heading.
-            travel = float("inf")
-            axis = None
-            for component, low, high, name in (
-                (direction.x, x_min, x_max, "x"),
-                (direction.y, y_min, y_max, "y"),
-            ):
-                origin = position.x if name == "x" else position.y
-                if component > 1e-9:
-                    candidate = (high - origin) / component
-                elif component < -1e-9:
-                    candidate = (low - origin) / component
-                else:
-                    continue
-                if 0.0 <= candidate < travel:
-                    travel = candidate
-                    axis = name
-            if axis is None or not np.isfinite(travel):
-                break
-
-            # The puck only travels as far as its remaining energy allows;
-            # a bank shot that runs out of roll before the hole is not a shot.
-            reach = self._stopping_distance(speed)
-            travel = min(travel, reach)
-
-            # Whichever hole the path reaches first is the one it falls into.
-            target_entry = entry_distance(position, direction, travel, hole)
-            own_entry = entry_distance(position, direction, travel, own_hole)
-            if own_entry is not None and (target_entry is None or own_entry < target_entry):
-                return 0.0
-            if target_entry is not None:
-                return 1.0
-
-            # Closest the puck's centre comes to the hole along this leg.
-            along = float(np.clip((hole - position).dot(direction), 0.0, travel))
-            closest = min(closest, (position + direction * along - hole).length)
-
-            if travel >= reach:
-                break  # rolls to a stop before reaching another wall
-            position = position + direction * travel
-            speed = self._speed_after_rolling(speed, travel)
-            bounced = self._bounce_direction(direction, axis) * speed
-            speed = bounced.length
-            if speed <= cfg.puck_stop_speed:
-                break
-            direction = bounced / speed
-
         if closest <= capture:
             return 1.0
+        tail = cfg.puck_radius * 2.0
         return float(max(0.0, 1.0 - (closest - capture) / tail))
 
     def snapshot(self) -> dict[str, np.ndarray]:

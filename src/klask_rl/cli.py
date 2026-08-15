@@ -19,6 +19,7 @@ from klask_rl.config import AGENTS, OPPONENT, REWARD_PROFILES, ArenaConfig
 from klask_rl.envs import KlaskParallelEnv, SelfPlayKlaskEnv
 from klask_rl.opponents import (
     HeuristicOpponent,
+    PlannerOpponent,
     OpponentPolicy,
     OpponentPool,
     PassiveOpponent,
@@ -143,7 +144,11 @@ def make_named_opponent(name: str, seed: int = 0) -> OpponentPolicy:
         return PassiveOpponent()
     if name == "striker":
         return StrikerOpponent()
-    raise typer.BadParameter("opponent must be one of: heuristic, random, passive, striker")
+    if name == "planner":
+        return PlannerOpponent()
+    raise typer.BadParameter(
+        "opponent must be one of: heuristic, random, passive, striker, planner"
+    )
 
 
 def make_training_pool(seed: int, arena_config: ArenaConfig | None = None) -> OpponentPool:
