@@ -343,6 +343,29 @@ REWARD_PROFILES: dict[str, RewardConfig] = {
         time_penalty=0.0,
         action_penalty=0.0,
     ),
+    # slow_v1 plus defensive shaping. On the slow board with the ball serving
+    # anywhere -- including behind the handle, near its own goal -- slow_v1
+    # concedes 30 goals to the fast-board model's 13 while scoring the same,
+    # and nothing in it rewards defending except the sparse terminal. Both new
+    # terms are per-step, so they carry the 0.4 dilation factor.
+    "slow_v2": RewardConfig(
+        terminal_goal=12.0,
+        progress=0.3,
+        aim=0.0,
+        puck_position=0.0,
+        puck_speed=0.0,
+        contact=0.0,
+        puck_distance=0.0,
+        defense=0.016,
+        own_goal_danger=0.02,
+        magnet_attached_penalty=0.0,
+        magnet_proximity_penalty=0.0,
+        magnet_attach_penalty=2.0,
+        magnet_pull_penalty=0.004,
+        own_side_penalty=0.016,
+        time_penalty=0.0,
+        action_penalty=0.0,
+    ),
     # Ablation of simple_v5: progress without aim. simple_v5 beat the previous
     # leader 39-12, but it changed two things at once, so this isolates whether
     # the bank-shot aim term earned its keep or plain "drive it downfield" did
