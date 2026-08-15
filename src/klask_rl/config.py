@@ -44,6 +44,10 @@ class ArenaConfig:
     # land only in a narrow band in front of the near handle, so a ball that
     # had got past the agent was a state it never saw and had no answer to.
     puck_start_margin: float = 0.02
+    # Curriculum: cap how far the ball may serve from the handle in whose half
+    # it lands, so early training is guaranteed reachable contact. 0 means no
+    # cap, i.e. the ball anywhere and the handle anywhere.
+    puck_start_max_handle_distance: float = 0.0
     # Extra room beyond the radius at which a body is actually captured. Both
     # clearances are derived from goal_radius rather than fixed, because the
     # curriculum overrides it: at goal_radius 0.15 the puck capture radius is

@@ -121,8 +121,13 @@ class KlaskPhysics:
         self.puck_shape.friction = cfg.puck_friction
         self.space.add(self.puck_body, self.puck_shape)
 
-        self._add_handle("left", self._sample_handle_start_position("left", rng))
-        self._add_handle("right", self._sample_handle_start_position("right", rng))
+        # Only the handle in the puck's own half is brought closer; the other
+        # cannot reach it anyway, so constraining it would just narrow the
+        # starting variety for no benefit.
+        near_side = "left" if self.puck_body.position.x < 0.0 else "right"
+        for agent in AGENTS:
+            reach = cfg.puck_start_max_handle_distance if agent == near_side else 0.0
+            self._add_handle(agent, self._sample_handle_start_position(agent, rng, reach))
         for position in self._magnet_start_positions():
             self._add_magnet(position)
 
@@ -165,7 +170,9 @@ class KlaskPhysics:
                     return (candidate.x, candidate.y)
         return (0.0, y_limit)
 
-    def _sample_handle_start_position(self, agent: str, rng: np.random.Generator) -> tuple[float, float]:
+    def _sample_handle_start_position(
+        self, agent: str, rng: np.random.Generator, max_puck_distance: float = 0.0
+    ) -> tuple[float, float]:
         """Place a handle anywhere in its own half, clear of its hole and the puck.
 
         Handles used to start at a near-fixed spot, so every episode opened
@@ -195,6 +202,8 @@ class KlaskPhysics:
                 continue
             if any((candidate - magnet).length < magnet_clearance for magnet in magnets):
                 continue
+            if max_puck_distance > 0.0 and (candidate - puck_position).length > max_puck_distance:
+                continue  # curriculum: start within reach of the ball
             return (candidate.x, candidate.y)
 
         # Crowded board: fall back to the nearest spot that clears the puck.

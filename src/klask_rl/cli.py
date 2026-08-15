@@ -194,12 +194,16 @@ def build_vec_env(
     reward_profile: str,
     vec_env: str,
     goal_radius: float | None = None,
+    spawn_distance: float | None = None,
 ) -> VecEnv:
     def make_env(rank: int):
         def _factory():
-            arena_config = (
-                replace(ArenaConfig(), goal_radius=goal_radius) if goal_radius is not None else None
-            )
+            overrides = {}
+            if goal_radius is not None:
+                overrides["goal_radius"] = goal_radius
+            if spawn_distance is not None:
+                overrides["puck_start_max_handle_distance"] = spawn_distance
+            arena_config = replace(ArenaConfig(), **overrides) if overrides else None
             pool = make_training_pool(seed + rank, arena_config=arena_config)
             env = SelfPlayKlaskEnv(
                 opponent=pool,
@@ -254,6 +258,7 @@ def run_train(
     resume_from: Path | None,
     resume_opponent_checkpoints: int,
     goal_radius: float | None = None,
+    spawn_distance: float | None = None,
     ent_coef: float | None = None,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -269,6 +274,7 @@ def run_train(
         reward_profile=reward_profile,
         vec_env=vec_env,
         goal_radius=goal_radius,
+        spawn_distance=spawn_distance,
     )
     if resume_from is not None:
         if not resume_from.exists():
@@ -731,6 +737,15 @@ def train_entry(
         float | None,
         typer.Option(help="Override the goal hole radius (board units), e.g. for curriculum stages."),
     ] = None,
+    spawn_distance: Annotated[
+        float | None,
+        typer.Option(
+            help=(
+                "Cap how far the ball serves from the handle in whose half it lands, "
+                "so early stages guarantee reachable contact. Omit for no cap."
+            )
+        ),
+    ] = None,
     ent_coef: Annotated[
         float | None,
         typer.Option(help="PPO entropy coefficient. Default: 0.0 fresh, checkpoint value on resume."),
@@ -755,6 +770,7 @@ def train_entry(
         resume_from,
         resume_opponent_checkpoints,
         goal_radius,
+        spawn_distance,
         ent_coef,
     )
 
@@ -901,6 +917,7 @@ def train(
     resume_from: Path | None = None,
     resume_opponent_checkpoints: int = 64,
     goal_radius: float | None = None,
+    spawn_distance: float | None = None,
     ent_coef: float | None = None,
 ) -> None:
     run_train(
@@ -922,6 +939,7 @@ def train(
         resume_from,
         resume_opponent_checkpoints,
         goal_radius,
+        spawn_distance,
         ent_coef,
     )
 
