@@ -181,6 +181,41 @@ def test_planner_aims_better_than_the_scripted_experts() -> None:
     assert planner > 0.5, f"planner shots are not on target ({planner:.2f})"
 
 
+def test_planner_saves_a_ball_rolling_into_its_own_hole() -> None:
+    """Blocking beats lining a shot up when the ball is already going in.
+
+    Standing behind a goalward ball to strike it means standing between it and
+    our own goal line and then having to be exactly on the shot line before it
+    arrives. Measured against a trained opponent, that is how every conceded
+    goal happened, so a threatened hole takes priority over the shot.
+    """
+    cfg = ArenaConfig()
+    hole = cfg.goal_center("left")
+    for offset in (0.22, -0.28, 0.0):
+        env = KlaskParallelEnv(reward_profile="slow_v2")
+        env.reset(seed=11)
+        _rest_the_puck(env, -0.10, hole[1])
+        env.physics.puck_body.velocity = (-0.55, 0.0)
+        env.physics.handle_bodies["left"].position = (-0.55, offset)
+        observations = {agent: env._make_observation(agent) for agent in AGENTS}
+
+        planner, passive = PlannerOpponent(), PassiveOpponent()
+        conceded = False
+        for _ in range(160):
+            actions = {
+                "left": planner.act(observations["left"]),
+                "right": passive.act(observations["right"]),
+            }
+            observations, _, terminations, truncations, infos = env.step(actions)
+            if any(terminations.values()):
+                conceded = env.scores["right"] > env.scores["left"]
+                break
+            if any(truncations.values()):
+                break
+        env.close()
+        assert not conceded, f"conceded a ball rolling at the hole from y offset {offset}"
+
+
 def test_planner_never_plans_a_shot_into_its_own_hole() -> None:
     """A plan that concedes must never outrank one that does not.
 

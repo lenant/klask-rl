@@ -312,6 +312,7 @@ class PlannerOpponent:
         min_launch_run: float = 0.21,
         switch_margin: float = 15.0,
         keeper_weight: float = 1.0,
+        save_first: bool = True,
         hole_margin: float = 0.02,
     ) -> None:
         self.config = arena_config or _ARENA
@@ -328,6 +329,7 @@ class PlannerOpponent:
         self.min_launch_run = min_launch_run
         self.switch_margin = switch_margin
         self.keeper_weight = keeper_weight
+        self.save_first = save_first
         self.hole_margin = hole_margin
         self._committed: int | None = None
 
@@ -724,6 +726,33 @@ class PlannerOpponent:
             target = np.asarray(self.own_hole) + to_puck / distance * self.defend_radius
         return self._steer(own, self._legal(target), cfg.max_handle_speed)
 
+    def _threatens_own_hole(self, puck: np.ndarray, puck_velocity: np.ndarray) -> bool:
+        if float(np.hypot(*puck_velocity)) <= self.config.puck_stop_speed:
+            return False
+        path = self.trajectory.march(
+            (puck[0], puck[1]),
+            (puck_velocity[0], puck_velocity[1]),
+            max_reflections=self.max_reflections,
+        )
+        return path.fell_into == "left"
+
+    def _save(self, own: np.ndarray, contact: np.ndarray) -> np.ndarray:
+        """Get between the ball and our own hole, and never mind the shot.
+
+        Lining a shot up means standing behind the ball, which when the ball is
+        already rolling goalward means standing *between it and our own goal
+        line* and then having to be perfectly on the shot line before it
+        arrives. Measured, that is how every conceded goal happened: attacking,
+        deep, with the ball going past. Blocking needs no alignment at all, and
+        the handle sitting goal-side sends the rebound back up the board.
+        """
+        goalward = contact - np.asarray(self.own_hole)
+        distance = float(np.hypot(*goalward))
+        if distance < 1e-6:
+            return self._steer(own, contact, self.config.max_handle_speed)
+        block = contact - goalward / distance * self.contact_distance
+        return self._steer(own, self._legal(block), self.config.max_handle_speed)
+
     def _legal(self, target: np.ndarray) -> np.ndarray:
         """Clamp a target into the half, and off our own hole."""
         clamped = np.array(
@@ -798,11 +827,14 @@ class PlannerOpponent:
         keeper = np.array(
             [observation[4] * cfg.half_width, observation[5] * cfg.half_height], dtype=np.float64
         )
-        plan = self._plan(own, contact, keeper, observation) if reachable else None
-        if plan is None:
-            action = self._defend(own, puck, puck_velocity)
+        if reachable and self.save_first and self._threatens_own_hole(puck, puck_velocity):
+            action = self._save(own, contact)
         else:
-            action = self._approach(own, own_velocity, contact, plan)
+            plan = self._plan(own, contact, keeper, observation) if reachable else None
+            if plan is None:
+                action = self._defend(own, puck, puck_velocity)
+            else:
+                action = self._approach(own, own_velocity, contact, plan)
 
         # Hole avoidance goes last: a klask loses the point outright, so it must
         # be able to override the magnet push rather than the reverse.
