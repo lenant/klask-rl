@@ -366,6 +366,29 @@ REWARD_PROFILES: dict[str, RewardConfig] = {
         time_penalty=0.0,
         action_penalty=0.0,
     ),
+    # slow_v2 with the defensive terms roughly doubled. slow_v2 cut conceding
+    # from 30 to 18 against the seed's 13 without costing any offence -- it
+    # still scores 25 -- so there is room to lean harder on the term that is
+    # visibly working. Watch that it does not tip into passivity: if goals
+    # scored fall below the seed's 25, this has gone too far.
+    "slow_v3": RewardConfig(
+        terminal_goal=12.0,
+        progress=0.3,
+        aim=0.0,
+        puck_position=0.0,
+        puck_speed=0.0,
+        contact=0.0,
+        puck_distance=0.0,
+        defense=0.032,
+        own_goal_danger=0.04,
+        magnet_attached_penalty=0.0,
+        magnet_proximity_penalty=0.0,
+        magnet_attach_penalty=2.0,
+        magnet_pull_penalty=0.004,
+        own_side_penalty=0.016,
+        time_penalty=0.0,
+        action_penalty=0.0,
+    ),
     # Ablation of simple_v5: progress without aim. simple_v5 beat the previous
     # leader 39-12, but it changed two things at once, so this isolates whether
     # the bank-shot aim term earned its keep or plain "drive it downfield" did
