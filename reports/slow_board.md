@@ -95,6 +95,17 @@ never deliver a terminal reward at all. Two decent models drew 51 of 80 games.
 Warm-start self-play resolves at a median of 986 steps, p75 2138. The naive
 dilation answer (450 x 2.5 = 1125) lands at 53%.
 
+**That reasoning did not survive contact with the experiment.** Two runs seeded
+identically, same league, curriculum and reward, differing only in episode
+budget: the 750-step run beat the 1500-step run 51-29 (p=0.02). The truncation
+mechanism is real but something else outweighs it -- most likely that shorter
+episodes mean more resets, so more distinct starting states per unit of
+compute, and truncation carries no penalty so there is nothing to lose by not
+resolving. Caveat: the 750 run used 16 envs and the 1500 run 12, so it is not a
+perfectly controlled comparison.
+
+Resolution rate is a reasonable thing to measure and a bad thing to choose on.
+
 ## Things that bite when spawns are randomised
 
 Serving the ball and the handles anywhere, rather than from near-fixed spots,
