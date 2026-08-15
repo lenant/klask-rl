@@ -124,11 +124,12 @@ distribution:
 Nothing trained on the slow board has beaten the fast-board model yet.
 `exp3_24M_baseline` remains the one to use.
 
-| model | vs seed (sides swapped) | goals for/against |
-| --- | --- | --- |
-| seed `exp3_24M_baseline` | -- | 25 / 13 |
-| warm start, no league | 26-74 (p<0.001) | 25 / 32 |
-| warm start, league restored | 30-50 (p=0.03) | 22 / 30 |
+| model | vs seed (sides swapped) | goals for/against | quality |
+| --- | --- | --- | --- |
+| seed `exp3_24M_baseline` | -- | 25 / 13 | 5.08 |
+| warm start, no league | 26-74 (p<0.001) | 25 / 32 | 4.42 |
+| warm start, league restored | 30-50 (p=0.03) | 22 / 30 | 4.28 |
+| plus defensive shaping | 38-56 (p=0.08) | 25 / 18 | 4.92 |
 
 Two causes found, in order:
 
@@ -141,7 +142,15 @@ Two causes found, in order:
    models at 22-25 goals; the gap is entirely conceding, 30 against the seed's
    13. `defense` and `own_goal_danger` are zero in the whole `simple*` family,
    which was harmless while the ball always started in front of the handle and
-   is not harmless now that it serves anywhere. `slow_v2` restores both.
+   is not harmless now that it serves anywhere. `slow_v2` restores both, and
+   conceding drops from 30 to 18 with quality up from 4.28 to 4.92. The gap to
+   the seed is no longer significant, though it has not been reversed.
+
+The three trained models are mutually non-transitive -- defensive shaping beats
+league-only against the seed and on the benchmark but loses to it directly,
+36-46 -- so only the comparisons against the fixed reference mean much. Cycles
+like this are normal in a self-play population and are a reason not to rank
+models by a single match.
 
 ### The methodological trap
 
