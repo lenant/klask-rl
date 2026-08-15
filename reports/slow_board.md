@@ -129,7 +129,8 @@ Nothing trained on the slow board has beaten the fast-board model yet.
 | seed `exp3_24M_baseline` | -- | 25 / 13 | 5.08 |
 | warm start, no league | 26-74 (p<0.001) | 25 / 32 | 4.42 |
 | warm start, league restored | 30-50 (p=0.03) | 22 / 30 | 4.28 |
-| plus defensive shaping | 38-56 (p=0.08) | 25 / 18 | 4.92 |
+| plus defensive shaping (`slow_v2`) | 38-56 (p=0.08) | 25 / 18 | 4.92 |
+| defensive shaping doubled (`slow_v3`) | 22-60 (p<0.001) | 22 / 26 | 4.67 |
 
 Two causes found, in order:
 
@@ -163,3 +164,29 @@ the direct match is what counts.
 
 Episode budget shows up here too: at 750 steps, two decent models draw 39 of 60
 games, so most comparisons at that budget carry very little signal.
+
+
+## Positional shaping terms get farmed
+
+Doubling the defensive weight made the model worse on *both* counts: it scored
+less (25 -> 22) and conceded **more** (18 -> 26), despite the extra reward
+being entirely for defending. More defensive reward bought worse defence.
+
+That is the same failure as two earlier terms, and the pattern is worth
+naming. `defense` pays for a *position* -- goal-side and aligned with the ball
+-- not for an interception. Weight it heavily and the agent optimises the
+position and stops actually stopping anything. Compare:
+
+- `puck_distance` pays for standing near the ball, not for hitting it, and
+  produced a policy that struck 2% of resting balls.
+- `aim` pays for being pointed at the goal, a state reachable without ever
+  shooting, and lost to having no aim term at all.
+- `defense` pays for standing in the right place, not for saving, and doubling
+  it increased goals conceded.
+
+`progress` is the exception that shows the rule: it can only be earned by
+actually moving the ball, so it cannot be collected from a standstill. When
+adding shaping here, prefer terms that require the event to happen over terms
+that pay for looking like it might.
+
+`slow_v2` is the right level for the defensive terms; `slow_v3` overshoots.
