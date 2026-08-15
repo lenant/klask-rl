@@ -190,3 +190,27 @@ adding shaping here, prefer terms that require the event to happen over terms
 that pay for looking like it might.
 
 `slow_v2` is the right level for the defensive terms; `slow_v3` overshoots.
+
+
+## More steps will not close the remaining gap
+
+The best configuration (`slow_v2`, league restored, 1500-step episodes) was
+checked against the seed at three points through its run: 16-17 a third of the
+way in, 11-17 two thirds, 16-22 at the end. Flat, if anything drifting worse.
+It had plateaued rather than still climbing, so the residual gap is not a
+training-duration problem and a longer run is not the answer.
+
+What is left, in rough order of expected value:
+
+1. **Retrain from scratch on the slow board with a long budget.** Every result
+   here is an *adaptation* of a policy shaped by the fast board, and adaptation
+   plateaued behind its own starting point. That is a strong hint the fast-board
+   solution sits in a basin that does not contain the slow-board optimum. This
+   needs the from-scratch problem solved first (see above).
+2. **DAgger rather than one-shot behaviour cloning.** The measured failure is
+   compounding error: the clone fits expert states and then drifts to states it
+   handles badly. Re-collecting expert labels on the policy's *own* states is
+   the standard fix and directly targets what was measured.
+3. **Reconsider whether the slow board needs its own opponents.** The league
+   carried across is made of fast-board snapshots, so the agent is practising
+   against opponents that are themselves mis-adapted.
