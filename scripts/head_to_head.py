@@ -14,13 +14,17 @@ from collections import Counter
 from math import comb
 from pathlib import Path
 
+from dataclasses import replace
+
 from klask_rl.config import ArenaConfig
 from klask_rl.envs import KlaskParallelEnv
 from klask_rl.opponents import SB3CheckpointOpponent
 
 
-def _play(left: str, right: str, games: int, seed0: int, profile: str) -> Counter:
-    env = KlaskParallelEnv(arena_config=ArenaConfig(), reward_profile=profile)
+def _play(left: str, right: str, games: int, seed0: int, profile: str, max_steps: int) -> Counter:
+    env = KlaskParallelEnv(
+        arena_config=replace(ArenaConfig(), max_steps=max_steps), reward_profile=profile
+    )
     policies = {"left": SB3CheckpointOpponent(left), "right": SB3CheckpointOpponent(right)}
     results: Counter = Counter()
     for game in range(games):
@@ -55,13 +59,19 @@ def main() -> None:
     parser.add_argument("model_b", type=Path)
     parser.add_argument("--games", type=int, default=150, help="Total games, split across sides.")
     parser.add_argument("--seed", type=int, default=90000)
-    parser.add_argument("--reward-profile", default="simple_v5_noaim")
+    parser.add_argument("--reward-profile", default="slow_v1")
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=750,
+        help="Match the training budget; the config default is far longer.",
+    )
     args = parser.parse_args()
 
     per_side = args.games // 2
     a, b = str(args.model_a), str(args.model_b)
-    forward = _play(a, b, per_side, args.seed, args.reward_profile)
-    reverse = _play(b, a, per_side, args.seed + 5000, args.reward_profile)
+    forward = _play(a, b, per_side, args.seed, args.reward_profile, args.max_steps)
+    reverse = _play(b, a, per_side, args.seed + 5000, args.reward_profile, args.max_steps)
 
     a_wins = forward["left"] + reverse["right"]
     b_wins = forward["right"] + reverse["left"]
