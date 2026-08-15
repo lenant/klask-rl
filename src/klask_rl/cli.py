@@ -146,14 +146,17 @@ def make_named_opponent(name: str, seed: int = 0) -> OpponentPolicy:
     raise typer.BadParameter("opponent must be one of: heuristic, random, passive, striker")
 
 
-def make_training_pool(seed: int) -> OpponentPool:
+def make_training_pool(seed: int, arena_config: ArenaConfig | None = None) -> OpponentPool:
+    # The scripted experts size their own-hole keep-out from goal_radius, which
+    # the curriculum changes between stages, so they need the same arena the
+    # env is using or they klask on the wider stage-1 hole.
     return OpponentPool(
         [
             PassiveOpponent(),
             RandomOpponent(seed=seed + 1),
-            StrikerOpponent(),
-            HeuristicOpponent(),
-            HeuristicOpponent(aggression=4.0),
+            StrikerOpponent(arena_config=arena_config),
+            HeuristicOpponent(arena_config=arena_config),
+            HeuristicOpponent(aggression=4.0, arena_config=arena_config),
         ],
         seed=seed,
     )
@@ -194,10 +197,10 @@ def build_vec_env(
 ) -> VecEnv:
     def make_env(rank: int):
         def _factory():
-            pool = make_training_pool(seed + rank)
             arena_config = (
                 replace(ArenaConfig(), goal_radius=goal_radius) if goal_radius is not None else None
             )
+            pool = make_training_pool(seed + rank, arena_config=arena_config)
             env = SelfPlayKlaskEnv(
                 opponent=pool,
                 arena_config=arena_config,
@@ -300,7 +303,12 @@ def run_train(
             batch_size=batch_size,
             n_epochs=5,
             learning_rate=3e-4,
-            gamma=0.985,
+            # 0.985 was tuned on the fast board. The board now runs at 0.4x
+            # with control_dt unchanged, so the same rally takes 2.5x the
+            # steps and a flat 0.985 discounts a goal ~15x harder than it
+            # used to. 0.985 ** 0.4 keeps the discount per unit of *game*
+            # rather than per control step.
+            gamma=0.994,
             gae_lambda=0.95,
             clip_range=0.2,
             ent_coef=0.0 if ent_coef is None else ent_coef,

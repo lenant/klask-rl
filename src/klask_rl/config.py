@@ -44,11 +44,11 @@ class ArenaConfig:
     # land only in a narrow band in front of the near handle, so a ball that
     # had got past the agent was a state it never saw and had no answer to.
     puck_start_margin: float = 0.02
-    puck_start_hole_clearance: float = 0.11
-    # Handles start anywhere in their own half, far enough from their own hole
-    # not to klask off the serve. They used to start at a near-fixed spot, so
-    # every episode opened from the same shape.
-    handle_start_hole_clearance: float = 0.13
+    # Extra room beyond the radius at which a body is actually captured. Both
+    # clearances are derived from goal_radius rather than fixed, because the
+    # curriculum overrides it: at goal_radius 0.15 the puck capture radius is
+    # 0.146, so a fixed 0.11 clearance served the ball straight into the goal.
+    start_hole_margin: float = 0.04
     puck_mass: float = 0.045
     max_handle_speed: float = 0.72
     # Actions are target velocities, but a hand (or a gantry) cannot change
@@ -109,6 +109,16 @@ class ArenaConfig:
     @property
     def puck_capture_radius(self) -> float:
         return math.sqrt(self.goal_radius**2 - self.puck_radius**2)
+
+    @property
+    def puck_start_hole_clearance(self) -> float:
+        """How far a served puck must sit from a hole to not fall straight in."""
+        return self.puck_capture_radius + self.start_hole_margin
+
+    @property
+    def handle_start_hole_clearance(self) -> float:
+        """How far a placed handle must sit from its own hole to not klask."""
+        return self.handle_klask_radius + self.start_hole_margin
 
     @property
     def handle_klask_radius(self) -> float:
@@ -302,6 +312,30 @@ REWARD_PROFILES: dict[str, RewardConfig] = {
         magnet_attach_penalty=2.0,
         magnet_pull_penalty=0.01,
         own_side_penalty=0.04,
+        time_penalty=0.0,
+        action_penalty=0.0,
+    ),
+    # simple_v5_noaim re-balanced for the 0.4x board. Per-step costs have to
+    # scale with it: the same rally now takes 2.5x the control steps, so a flat
+    # own_side integrated to about -10 an episode against a terminal of 12 --
+    # the ratio that produced the mutual-park stalemate before. progress is
+    # deliberately NOT scaled: it telescopes to (final_x - initial_x), so its
+    # episode total is already dilation-invariant.
+    "slow_v1": RewardConfig(
+        terminal_goal=12.0,
+        progress=0.3,
+        aim=0.0,
+        puck_position=0.0,
+        puck_speed=0.0,
+        contact=0.0,
+        puck_distance=0.0,
+        defense=0.0,
+        own_goal_danger=0.0,
+        magnet_attached_penalty=0.0,
+        magnet_proximity_penalty=0.0,
+        magnet_attach_penalty=2.0,
+        magnet_pull_penalty=0.004,
+        own_side_penalty=0.016,
         time_penalty=0.0,
         action_penalty=0.0,
     ),

@@ -30,17 +30,18 @@ def collect_expert_transitions(
     """Collect canonical observations and expert actions for warm-start training."""
 
     rng = np.random.default_rng(seed)
-    expert = expert or StrikerOpponent()
-    opponents: list[OpponentPolicy] = [
-        PassiveOpponent(),
-        RandomOpponent(seed=seed + 1),
-        StrikerOpponent(aggression=3.2),
-    ]
-    observations: list[np.ndarray] = []
-    actions: list[np.ndarray] = []
     arena_config = (
         replace(ArenaConfig(), goal_radius=goal_radius) if goal_radius is not None else None
     )
+    # The expert being cloned has to reason about the same hole the env uses.
+    expert = expert or StrikerOpponent(arena_config=arena_config)
+    opponents: list[OpponentPolicy] = [
+        PassiveOpponent(),
+        RandomOpponent(seed=seed + 1),
+        StrikerOpponent(aggression=3.2, arena_config=arena_config),
+    ]
+    observations: list[np.ndarray] = []
+    actions: list[np.ndarray] = []
     env = SelfPlayKlaskEnv(
         opponent=opponents[0],
         arena_config=arena_config,

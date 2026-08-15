@@ -8,7 +8,7 @@ LOG=$RUN/train.log
 mkdir -p $RUN
 cp runs/klask/latest/exp3_24M_baseline.zip $RUN/seed.zip
 COMMON="--num-envs 12 --n-steps 1024 --batch-size 1024 --snapshot-freq 100000 \
-  --max-steps 750 --reward-profile simple_v5_noaim --vec-env subproc --device cpu \
+  --max-steps 750 --reward-profile slow_v1 --vec-env subproc --device cpu \
   --policy-net-arch 256x256x256 --ent-coef 0.01 --output-dir $RUN"
 
 echo "=== stage 1: goal_radius 0.15, seeded, -> 6M ($(date -u))" | tee -a $LOG

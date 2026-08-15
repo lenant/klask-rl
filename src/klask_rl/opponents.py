@@ -23,6 +23,27 @@ STRIKE_OVERSHOOT = 0.3
 REACH_X_MIN = -(_ARENA.half_width - _ARENA.handle_radius) / _ARENA.half_width
 REACH_Y = (_ARENA.half_height - _ARENA.handle_radius) / _ARENA.half_height
 OWN_HOLE_X = -_ARENA.goal_center_x / _ARENA.half_width
+
+
+class _HoleGeometry:
+    """Keep-out sizes around the agent's own hole.
+
+    These follow goal_radius, which the curriculum changes between stages. Held
+    per instance rather than as module constants: sized for the default 0.075
+    hole, the experts klasked 20% of the time at the 0.15 hole of stage 1.
+    """
+
+    def __init__(self, config: ArenaConfig | None = None) -> None:
+        arena = config or _ARENA
+        klask = arena.handle_klask_radius
+        self.avoid_x = 3.0 * klask / arena.half_width
+        self.avoid_y = 3.0 * klask / arena.half_height
+        self.safe_y = 2.0 * klask / arena.half_height
+        self.magnet_avoid_x = arena.magnet_attraction_range / arena.half_width
+        self.magnet_avoid_y = arena.magnet_attraction_range / arena.half_height
+        self.magnet_capture = arena.magnet_capture_radius
+        self.half_width = arena.half_width
+        self.half_height = arena.half_height
 # Roughly twice the klask radius, and deliberately below ALIGN_GAP: a skirt
 # wider than the alignment window would hold the handle permanently off the
 # puck's line, so it would wind up next to the hole and never commit.
@@ -36,21 +57,38 @@ WALL_ESCAPE_Y = 0.14
 # Radius of the keep-out bubble around the agent's own hole, per axis. Skirting
 # only the *target* is not enough: the handle can drive through the hole on its
 # way to a perfectly safe target, which is how deep starts turned into klasks.
-HOLE_AVOID_X = 0.17
-HOLE_AVOID_Y = 0.24
 
 
-def _avoid_own_hole(action: np.ndarray, own_x: float, own_y: float) -> np.ndarray:
+def _avoid_own_hole(action: np.ndarray, own_x: float, own_y: float, geometry: _HoleGeometry) -> np.ndarray:
     """Bend an action away from the agent's own hole as it gets close.
 
     A potential field rather than a target offset, so it applies whatever the
     handle happens to be doing -- including travelling somewhere else entirely.
     """
-    offset_x = (own_x - OWN_HOLE_X) / HOLE_AVOID_X
-    offset_y = own_y / HOLE_AVOID_Y
+    offset_x = (own_x - OWN_HOLE_X) / geometry.avoid_x
+    offset_y = own_y / geometry.avoid_y
     danger = offset_x * offset_x + offset_y * offset_y
     if danger >= 1.0:
         return action
+
+    if own_x < OWN_HOLE_X:
+        # Behind the hole, "directly away" means deeper into the back wall, and
+        # every route back into play then reads as heading inward -- which
+        # pinned the handle against the boards for whole episodes. Escape
+        # sideways instead, which clears the hole without trapping it.
+        sideways = 1.0 if own_y >= 0.0 else -1.0
+        urgency = 1.0 - float(np.sqrt(danger))
+        forward, lateral = float(action[0]), float(action[1])
+        if lateral * sideways < 0.0:
+            # Chasing the puck's y pulls straight back onto the hole's line and
+            # exactly cancelled the escape, so the handle hovered. Drop that
+            # component rather than blending against it.
+            lateral = 0.0
+        if abs(own_y) < geometry.safe_y and forward > 0.0:
+            # Coming back into play means crossing the hole's line, so get
+            # clear of it sideways before moving up the board at all.
+            forward = 0.0
+        return np.array([forward, lateral + sideways * urgency * 2.0], dtype=np.float32)
 
     away = np.array([offset_x, offset_y], dtype=np.float32)
     magnitude = float(np.linalg.norm(away))
@@ -73,8 +111,17 @@ def _avoid_own_hole(action: np.ndarray, own_x: float, own_y: float) -> np.ndarra
 # Magnets sit on the centre line, exactly where the experts like to wait, and
 # collecting two of them loses the point. Same keep-out treatment as the hole.
 BASE_OBSERVATION_FEATURES = 16
-MAGNET_AVOID_X = _ARENA.magnet_attraction_range / _ARENA.half_width
-MAGNET_AVOID_Y = _ARENA.magnet_attraction_range / _ARENA.half_height
+
+
+def _is_in_a_hole(x: float, y: float, geometry: _HoleGeometry) -> bool:
+    """A magnet sitting in a hole is inert and cannot be collected."""
+    captured = geometry.magnet_capture
+    for hole_x in (OWN_HOLE_X, -OWN_HOLE_X):
+        dx = (x - hole_x) * geometry.half_width
+        dy = (y - 0.0) * geometry.half_height
+        if dx * dx + dy * dy <= captured * captured:
+            return True
+    return False
 
 
 def _push_out_of(action: np.ndarray, offset_x: float, offset_y: float) -> np.ndarray:
@@ -95,7 +142,7 @@ def _push_out_of(action: np.ndarray, offset_x: float, offset_y: float) -> np.nda
     return action + away * (urgency * 2.0)
 
 
-def _avoid_magnets(action: np.ndarray, own_x: float, own_y: float, observation: np.ndarray) -> np.ndarray:
+def _avoid_magnets(action: np.ndarray, own_x: float, own_y: float, observation: np.ndarray, geometry: _HoleGeometry) -> np.ndarray:
     """Steer clear of loose magnets. Two of them on your handle loses the point."""
     for index in range(_ARENA.magnet_count):
         base = BASE_OBSERVATION_FEATURES + index * 5
@@ -103,10 +150,14 @@ def _avoid_magnets(action: np.ndarray, own_x: float, own_y: float, observation: 
             break
         if abs(float(observation[base + 4])) > 0.5:
             continue  # already attached to someone; avoiding it changes nothing
+        magnet_x = float(observation[base])
+        magnet_y = float(observation[base + 1])
+        if _is_in_a_hole(magnet_x, magnet_y, geometry):
+            continue  # captured and inert: keeping out only fences off the goal
         action = _push_out_of(
             action,
-            (own_x - float(observation[base])) / MAGNET_AVOID_X,
-            (own_y - float(observation[base + 1])) / MAGNET_AVOID_Y,
+            (own_x - float(observation[base])) / geometry.magnet_avoid_x,
+            (own_y - float(observation[base + 1])) / geometry.magnet_avoid_y,
         )
     return np.clip(action, -1.0, 1.0)
 
@@ -153,8 +204,9 @@ def _attack_target(
 class HeuristicOpponent:
     """Small goalie/striker baseline used for bootstrapping and evaluation."""
 
-    def __init__(self, aggression: float = 2.8) -> None:
+    def __init__(self, aggression: float = 2.8, arena_config: ArenaConfig | None = None) -> None:
         self.aggression = aggression
+        self.geometry = _HoleGeometry(arena_config)
 
     def act(self, observation: np.ndarray) -> np.ndarray:
         own_x, own_y = observation[0], observation[1]
@@ -174,15 +226,16 @@ class HeuristicOpponent:
         )
         # Hole avoidance goes last: a klask loses the point outright, so it
         # must be able to override the magnet push rather than the reverse.
-        action = _avoid_magnets(action, own_x, own_y, observation)
-        return _avoid_own_hole(action, own_x, own_y)
+        action = _avoid_magnets(action, own_x, own_y, observation, self.geometry)
+        return _avoid_own_hole(action, own_x, own_y, self.geometry)
 
 
 class StrikerOpponent:
     """Aggressive expert used for behavior-cloning warm starts and baselines."""
 
-    def __init__(self, aggression: float = 5.0) -> None:
+    def __init__(self, aggression: float = 5.0, arena_config: ArenaConfig | None = None) -> None:
         self.aggression = aggression
+        self.geometry = _HoleGeometry(arena_config)
 
     def act(self, observation: np.ndarray) -> np.ndarray:
         own_x, own_y = observation[0], observation[1]
@@ -205,8 +258,8 @@ class StrikerOpponent:
         )
         # Hole avoidance goes last: a klask loses the point outright, so it
         # must be able to override the magnet push rather than the reverse.
-        action = _avoid_magnets(action, own_x, own_y, observation)
-        return _avoid_own_hole(action, own_x, own_y)
+        action = _avoid_magnets(action, own_x, own_y, observation, self.geometry)
+        return _avoid_own_hole(action, own_x, own_y, self.geometry)
 
 
 class PassiveOpponent:
